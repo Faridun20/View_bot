@@ -15,7 +15,7 @@ from __future__ import annotations
 import asyncio
 import logging
 
-from aiogram import Router
+from aiogram import Bot, Router
 from aiogram.exceptions import TelegramAPIError
 from aiogram.filters import Command, CommandObject
 from aiogram.types import Message
@@ -79,13 +79,19 @@ async def cmd_search(msg: Message, command: CommandObject) -> None:
                 parse_mode="HTML",
             )
             return
+    await do_search(msg.bot, msg.chat.id, n=n, show_all=show_all)
 
+
+async def do_search(bot: Bot, chat_id: int, *, n: int, show_all: bool) -> None:
+    """Общая логика поиска. Вызывается из текстовой команды И из меню-callback."""
     db = init_db(config.DB_PATH)
-    f = db.get_filter(msg.chat.id)
+    f = db.get_filter(chat_id)
     filter_descr = "по вашему фильтру" if not f.is_empty() else "(фильтр не задан — самые свежие)"
     mode_descr = " (включая ранее показанные)" if show_all else ""
 
-    status_msg = await msg.answer(f"🔎 Ищу {n} лотов {filter_descr}{mode_descr}…")
+    status_msg = await bot.send_message(
+        chat_id, f"🔎 Ищу {n} лотов {filter_descr}{mode_descr}…"
+    )
 
     # 1. Обход подкатегорий — даёт {pid: (cate_code, ListingPreview)}.
     # _scan_categories возвращает только {pid: cate_code}, поэтому ниже
@@ -94,11 +100,11 @@ async def cmd_search(msg: Message, command: CommandObject) -> None:
         previews = await asyncio.to_thread(_scan_with_previews)
     except Exception as e:
         logger.exception("search: ошибка обхода")
-        await msg.answer(f"❌ Ошибка обхода: <code>{e}</code>", parse_mode="HTML")
+        await bot.send_message(chat_id, f"❌ Ошибка обхода: <code>{e}</code>", parse_mode="HTML")
         return
 
     if not previews:
-        await msg.answer("Сайт ничего не вернул. Попробуйте позже.")
+        await bot.send_message(chat_id, "Сайт ничего не вернул. Попробуйте позже.")
         return
 
     # 2. Идём по свежим pid сверху (preview уже отсортированы)
@@ -116,7 +122,7 @@ async def cmd_search(msg: Message, command: CommandObject) -> None:
         scanned += 1
 
         # Сразу скипаем то, что уже присылали — карточку даже не качаем.
-        if not show_all and db.was_sent(msg.chat.id, prev.pid):
+        if not show_all and db.was_sent(chat_id, prev.pid):
             skipped_seen += 1
             continue
 
@@ -133,12 +139,12 @@ async def cmd_search(msg: Message, command: CommandObject) -> None:
         if not matches(item, f):
             continue
 
-        ok = await send_listing(msg.bot, msg.chat.id, item)
+        ok = await send_listing(bot, chat_id, item)
         if ok:
             sent += 1
             # Запоминаем — чтобы не присылать повторно ни через /search, ни
             # через почасовой мониторинг.
-            db.mark_sent(msg.chat.id, prev.pid)
+            db.mark_sent(chat_id, prev.pid)
         # Telegram-rate-limit: 1 msg/sec на чат для send_photo с caption.
         await asyncio.sleep(0.3)
 
@@ -167,7 +173,8 @@ async def cmd_search(msg: Message, command: CommandObject) -> None:
         )
 
     if sent == 0:
-        await msg.answer(
+        await bot.send_message(
+            chat_id,
             f"😕 Ничего не подошло.\n"
             f"Просмотрено: <b>{scanned}</b> лотов "
             f"(скачано карточек: {fetched}, отсеяно по цене на превью: "
@@ -177,7 +184,8 @@ async def cmd_search(msg: Message, command: CommandObject) -> None:
             parse_mode="HTML",
         )
     elif sent < n:
-        await msg.answer(
+        await bot.send_message(
+            chat_id,
             f"Прислал <b>{sent}</b> из {n} — это всё, что нашёл среди "
             f"{scanned} последних лотов.\n\n"
             f"Расширить выборку: /filter, или попробуйте позже — новые лоты "
@@ -185,7 +193,8 @@ async def cmd_search(msg: Message, command: CommandObject) -> None:
             parse_mode="HTML",
         )
     else:
-        await msg.answer(
+        await bot.send_message(
+            chat_id,
             f"✅ Прислал {sent} лотов "
             f"(просмотрено {scanned}, скачано карточек {fetched}).{seen_hint}",
             parse_mode="HTML",
