@@ -201,6 +201,13 @@ class DB:
                 "SELECT 1 FROM sent WHERE chat_id = ? AND pid = ?", (chat_id, pid)
             ).fetchone() is not None
 
+    def clear_sent(self, chat_id: int) -> int:
+        """Удалить историю отправленных лотов для одного пользователя.
+        Возвращает число удалённых записей."""
+        with self._conn() as c:
+            cur = c.execute("DELETE FROM sent WHERE chat_id = ?", (chat_id,))
+            return cur.rowcount
+
 
 _db: DB | None = None
 

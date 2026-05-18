@@ -5,8 +5,10 @@
 которые проходят пользовательский фильтр.
 
 Использование:
-    /search          — 5 свежих лотов
-    /search 10       — 10 свежих лотов (макс. 20)
+    /search          — 5 свежих лотов, ещё не присылавшихся в этом чате
+    /search 10       — 10 (макс. 20)
+    /search all      — 5 свежих, ИГНОРИРУЯ историю (можно увидеть повторы)
+    /search all 10   — то же, но 10
 """
 from __future__ import annotations
 
@@ -56,15 +58,24 @@ def _passes_preview(prev: ListingPreview, f: UserFilter) -> bool:
 
 @router.message(Command("search"))
 async def cmd_search(msg: Message, command: CommandObject) -> None:
+    # Парсим аргументы: '/search', '/search 10', '/search all', '/search all 10'
     n = DEFAULT_COUNT
-    if command.args:
-        arg = command.args.strip().split()[0]
-        if arg.isdigit():
-            n = max(1, min(MAX_COUNT, int(arg)))
+    show_all = False
+    parts = (command.args or "").strip().split()
+    if parts and parts[0].lower() == "all":
+        show_all = True
+        parts = parts[1:]
+    if parts:
+        if parts[0].isdigit():
+            n = max(1, min(MAX_COUNT, int(parts[0])))
         else:
             await msg.answer(
-                f"Использование: <code>/search [число]</code>\n"
-                f"Например: <code>/search 10</code> (макс. {MAX_COUNT})",
+                "Использование:\n"
+                "<code>/search</code> или <code>/search 10</code> — N свежих, "
+                "ещё не присылавшихся\n"
+                "<code>/search all</code> или <code>/search all 10</code> — "
+                "игнорируя историю\n\n"
+                f"Максимум {MAX_COUNT} за раз.",
                 parse_mode="HTML",
             )
             return
@@ -72,8 +83,9 @@ async def cmd_search(msg: Message, command: CommandObject) -> None:
     db = init_db(config.DB_PATH)
     f = db.get_filter(msg.chat.id)
     filter_descr = "по вашему фильтру" if not f.is_empty() else "(фильтр не задан — самые свежие)"
+    mode_descr = " (включая ранее показанные)" if show_all else ""
 
-    status_msg = await msg.answer(f"🔎 Ищу {n} лотов {filter_descr}…")
+    status_msg = await msg.answer(f"🔎 Ищу {n} лотов {filter_descr}{mode_descr}…")
 
     # 1. Обход подкатегорий — даёт {pid: (cate_code, ListingPreview)}.
     # _scan_categories возвращает только {pid: cate_code}, поэтому ниже
@@ -95,14 +107,20 @@ async def cmd_search(msg: Message, command: CommandObject) -> None:
     sent = 0
     scanned = 0           # сколько превью-карточек просмотрено
     fetched = 0           # сколько полных карточек скачано
-    skipped_preview = 0   # сколько отсеяно ещё на этапе превью
+    skipped_preview = 0   # отсеяно на этапе превью (цена)
+    skipped_seen = 0      # отсеяно как уже отправленные ранее
 
     for prev in previews:
         if sent >= n or scanned >= budget:
             break
         scanned += 1
 
-        # Превью-фильтр
+        # Сразу скипаем то, что уже присылали — карточку даже не качаем.
+        if not show_all and db.was_sent(msg.chat.id, prev.pid):
+            skipped_seen += 1
+            continue
+
+        # Превью-фильтр (по цене)
         if not _passes_preview(prev, f):
             skipped_preview += 1
             continue
@@ -118,6 +136,9 @@ async def cmd_search(msg: Message, command: CommandObject) -> None:
         ok = await send_listing(msg.bot, msg.chat.id, item)
         if ok:
             sent += 1
+            # Запоминаем — чтобы не присылать повторно ни через /search, ни
+            # через почасовой мониторинг.
+            db.mark_sent(msg.chat.id, prev.pid)
         # Telegram-rate-limit: 1 msg/sec на чат для send_photo с caption.
         await asyncio.sleep(0.3)
 
@@ -137,12 +158,22 @@ async def cmd_search(msg: Message, command: CommandObject) -> None:
     except Exception:
         pass
 
+    seen_hint = ""
+    if skipped_seen:
+        seen_hint = (
+            f"\n♻️ Пропущено {skipped_seen} уже виденных. "
+            f"Чтобы пересмотреть с нуля: <code>/forget</code> "
+            f"или <code>/search all {n}</code>."
+        )
+
     if sent == 0:
         await msg.answer(
             f"😕 Ничего не подошло.\n"
             f"Просмотрено: <b>{scanned}</b> лотов "
-            f"(скачано карточек: {fetched}, отсеяно по цене на превью: {skipped_preview}).\n\n"
-            f"Посмотрите фильтр: /myfilter\nСбросить: /reset",
+            f"(скачано карточек: {fetched}, отсеяно по цене на превью: "
+            f"{skipped_preview}, уже виденных: {skipped_seen}).\n\n"
+            f"Посмотрите фильтр: /myfilter\nСбросить фильтр: /reset"
+            f"{seen_hint}",
             parse_mode="HTML",
         )
     elif sent < n:
@@ -150,13 +181,14 @@ async def cmd_search(msg: Message, command: CommandObject) -> None:
             f"Прислал <b>{sent}</b> из {n} — это всё, что нашёл среди "
             f"{scanned} последних лотов.\n\n"
             f"Расширить выборку: /filter, или попробуйте позже — новые лоты "
-            f"появляются регулярно.",
+            f"появляются регулярно.{seen_hint}",
             parse_mode="HTML",
         )
     else:
         await msg.answer(
             f"✅ Прислал {sent} лотов "
-            f"(просмотрено {scanned}, скачано карточек {fetched})."
+            f"(просмотрено {scanned}, скачано карточек {fetched}).{seen_hint}",
+            parse_mode="HTML",
         )
 
 

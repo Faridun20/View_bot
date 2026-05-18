@@ -28,8 +28,11 @@ HELP_TEXT = (
     "/filter — настроить фильтр (производитель, год, цена, моточасы, ключевое слово)\n"
     "/myfilter — посмотреть текущий фильтр\n"
     "/reset — сбросить фильтр (тогда шлются все новые лоты)\n"
-    "/search [N] — прямо сейчас прислать N свежих лотов по вашему фильтру "
-    "(по умолчанию 5, макс 20)\n"
+    "/search [N] — прислать N свежих лотов по фильтру, <b>исключая ранее показанные</b> "
+    "(макс 20, по умолчанию 5)\n"
+    "/search all [N] — то же, но <b>с повторами</b> (если хочется пересмотреть)\n"
+    "/forget — очистить вашу историю «уже виденных», чтобы /search снова мог "
+    "показать всё с нуля\n"
     "/test — прислать самый свежий лот для проверки\n"
     "/status — статистика бота\n"
     "/help — эта справка\n\n"
@@ -87,7 +90,26 @@ async def cmd_test(msg: Message) -> None:
         await msg.answer("Не удалось получить лот — проверьте логи.")
         return
 
-    await send_listing(msg.bot, msg.chat.id, item)
+    ok = await send_listing(msg.bot, msg.chat.id, item)
+    if ok:
+        # Помечаем как отправленное — чтобы /search и почасовой мониторинг
+        # потом не дублировали этот же лот.
+        init_db(config.DB_PATH).mark_sent(msg.chat.id, item.pid)
+
+
+@router.message(Command("forget"))
+async def cmd_forget(msg: Message) -> None:
+    """Очистить историю отправленных лотов для пользователя — после этого
+    /search снова сможет показать любые свежие лоты."""
+    db = init_db(config.DB_PATH)
+    removed = db.clear_sent(msg.chat.id)
+    if removed:
+        await msg.answer(
+            f"♻️ История очищена ({removed} лотов забыто).\n"
+            f"Теперь /search и почасовой мониторинг могут снова прислать ранее показанные лоты."
+        )
+    else:
+        await msg.answer("История уже пуста — забывать нечего.")
 
 
 def _fetch_latest():
