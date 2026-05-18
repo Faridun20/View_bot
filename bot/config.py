@@ -46,5 +46,10 @@ MAX_NOTIFICATIONS_PER_RUN = int(_env("MAX_NOTIFICATIONS_PER_RUN", "20") or 20)
 # чтобы не спамить старыми объявлениями.
 SEED_RECENT_LOTS = int(_env("SEED_RECENT_LOTS", "200") or 200)
 
+# Включать ли в мониторинг подкатегории «навесное оборудование» (어태치먼트)
+# и «запчасти для экскаваторов» (굴삭기부속). По умолчанию выключено —
+# в /search и почасовом обходе только сама техника.
+INCLUDE_PARTS: bool = (_env("INCLUDE_PARTS", "false") or "false").strip().lower() in ("1", "true", "yes")
+
 # Логирование
 LOG_LEVEL = _env("LOG_LEVEL", "INFO")

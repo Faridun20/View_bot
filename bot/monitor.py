@@ -13,7 +13,12 @@ from aiogram import Bot
 from bot import config
 from bot.notifier import send_listing
 from bot.scraper import get_session, parse_item_page, parse_listing_page
-from bot.scraper.models import EXCAVATOR_SUBCATEGORIES, Listing
+from bot.scraper.models import (
+    EXCAVATOR_SUBCATEGORIES,
+    Listing,
+    looks_like_parts,
+    target_subcategories,
+)
 from bot.storage.db import DB, UserFilter
 
 logger = logging.getLogger(__name__)
@@ -22,10 +27,13 @@ logger = logging.getLogger(__name__)
 # ---------- сетевые операции (sync, в to_thread) ---------------------------
 
 def _scan_categories() -> dict[int, str]:
-    """Обходит все подкатегории экскаваторов. Возвращает {pid: cate_code}."""
+    """Обходит подкатегории экскаваторов (без запчастей, если так настроено).
+
+    Возвращает {pid: cate_code}.
+    """
     sess = get_session()
     found: dict[int, str] = {}
-    for cate_code in EXCAVATOR_SUBCATEGORIES:
+    for cate_code in target_subcategories(include_parts=config.INCLUDE_PARTS):
         url = f"/sub8_1_s.html?cate_code={cate_code}&limit=70&page=1"
         try:
             resp = sess.get(url)
@@ -58,6 +66,12 @@ def _year_int(year_raw: str | None) -> int | None:
 
 
 def matches(item: Listing, f: UserFilter) -> bool:
+    # Жёсткое правило: если запчасти/навесное в глобальной настройке
+    # отключены, такие лоты не должны попадать ни в /search, ни в рассылку,
+    # даже если каким-то образом просочились в карточку (бывает, что
+    # продавец публикует запчасть в подкатегории «настоящих» машин).
+    if not config.INCLUDE_PARTS and looks_like_parts(item.category_path):
+        return False
     if f.manufacturer and (item.manufacturer or "").strip() != f.manufacturer.strip():
         return False
     if f.year_from or f.year_to:

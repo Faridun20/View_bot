@@ -33,7 +33,9 @@ HELP_TEXT = (
     "/test — прислать самый свежий лот для проверки\n"
     "/status — статистика бота\n"
     "/help — эта справка\n\n"
-    f"Проверка сайта — каждые {config.MONITOR_INTERVAL_MINUTES} минут."
+    f"Проверка сайта — каждые {config.MONITOR_INTERVAL_MINUTES} минут.\n"
+    f"Запчасти и навесное оборудование: "
+    f"{'включены' if config.INCLUDE_PARTS else 'НЕ показываются (только экскаваторы)'}."
 )
 
 
@@ -89,10 +91,12 @@ async def cmd_test(msg: Message) -> None:
 
 
 def _fetch_latest():
-    """Берёт самый свежий pid из первой подкатегории и парсит карточку."""
+    """Берёт самый свежий лот среди настоящих экскаваторов и парсит карточку."""
+    from bot.scraper.models import target_subcategories
     sess = get_session()
-    # Самые активные подкатегории — навесное (100106) и крупные экскаваторы.
-    for cate_code in ("100106", "100100", "100101", "100102", "100104"):
+    # Идём по «машинным» подкатегориям — обычно объявления появляются часто
+    # в крупных экскаваторах (100100) и мини (100104).
+    for cate_code in target_subcategories(include_parts=config.INCLUDE_PARTS):
         resp = sess.get(f"/sub8_1_s.html?cate_code={cate_code}&limit=70&page=1")
         previews = parse_listing_page(resp.text, cate_code=cate_code)
         if previews:

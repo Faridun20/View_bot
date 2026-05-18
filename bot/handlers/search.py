@@ -163,18 +163,18 @@ async def cmd_search(msg: Message, command: CommandObject) -> None:
 # ---- helpers --------------------------------------------------------------
 
 def _scan_with_previews() -> list[ListingPreview]:
-    """Обходит все 8 подкатегорий, возвращает уникальные превью по убыванию pid."""
+    """Обходит подкатегории (с учётом INCLUDE_PARTS), возвращает уникальные
+    превью по убыванию pid."""
     from bot.scraper import get_session, parse_listing_page
-    from bot.scraper.models import EXCAVATOR_SUBCATEGORIES
+    from bot.scraper.models import target_subcategories
 
     sess = get_session()
     by_pid: dict[int, ListingPreview] = {}
-    for cate_code in EXCAVATOR_SUBCATEGORIES:
+    for cate_code in target_subcategories(include_parts=config.INCLUDE_PARTS):
         try:
             resp = sess.get(f"/sub8_1_s.html?cate_code={cate_code}&limit=70&page=1")
             for prev in parse_listing_page(resp.text, cate_code=cate_code):
-                # Если pid уже встречался — оставляем первое попадание
-                # (порядок обхода: 100100 первой = наиболее свежая выборка).
+                # Если pid уже встречался — оставляем первое попадание.
                 by_pid.setdefault(prev.pid, prev)
         except Exception as e:
             logger.exception("search/_scan_with_previews: cate=%s: %s", cate_code, e)
