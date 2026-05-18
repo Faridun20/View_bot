@@ -1,0 +1,17 @@
+.venv/
+.env
+data/
+recon_out/
+scrape_test_out/
+
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+.idea/
+.vscode/
+*.log

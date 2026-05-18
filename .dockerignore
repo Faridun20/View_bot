@@ -1,0 +1,25 @@
+# Локальное окружение
+.venv/
+.env
+data/
+recon_out/
+scrape_test_out/
+
+# Тесты и одноразовые скрипты — в образ не нужны
+scrape_test.py
+recon.py
+recon2.py
+
+# Git и IDE
+.git/
+.gitignore
+.idea/
+.vscode/
+
+# Кеши
+__pycache__/
+*.pyc
+*.pyo
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
