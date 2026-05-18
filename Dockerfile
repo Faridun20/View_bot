@@ -1,6 +1,8 @@
 # Официальный образ Playwright с предустановленным Chromium и системными
-# библиотеками. Меньше шансов отстрелить ногу при апгрейде Playwright.
-FROM mcr.microsoft.com/playwright/python:v1.49.0-jammy
+# библиотеками. ВАЖНО: версия здесь должна совпадать с playwright в
+# requirements.txt — иначе python-пакет ищет браузер не там, где он лежит
+# в образе ('Executable doesn't exist at /ms-playwright/chromium_*').
+FROM mcr.microsoft.com/playwright/python:v1.60.0-jammy
 
 ENV PYTHONUNBUFFERED=1 \
     PYTHONDONTWRITEBYTECODE=1 \

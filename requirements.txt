@@ -1,4 +1,7 @@
-playwright>=1.45
+# ВАЖНО: версия playwright должна совпадать с тегом образа в Dockerfile
+# (mcr.microsoft.com/playwright/python:v<VERSION>-jammy), иначе Chromium
+# в образе не подходит под python-обёртку.
+playwright==1.60.0
 beautifulsoup4>=4.12
 lxml>=5.0
 requests>=2.31
