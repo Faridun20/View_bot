@@ -32,9 +32,13 @@ async def main() -> None:
         )
 
     # Принудительно настраиваем парсер на использование пути из конфига
-    # (а не дефолтного recon_out/storage_state.json).
+    # (а не дефолтного recon_out/storage_state.json). Создание сессии
+    # уходит в поток: при первом запуске без cookie оно запускает
+    # sync_playwright, а sync API нельзя вызывать из активного asyncio loop.
     import bot.scraper.client as client_mod
-    client_mod._singleton = CupidSession(storage_path=config.CUPID_STORAGE)
+    client_mod._singleton = await asyncio.to_thread(
+        CupidSession, config.CUPID_STORAGE
+    )
 
     db = init_db(config.DB_PATH)
 
