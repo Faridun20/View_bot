@@ -16,7 +16,9 @@ from bot.scraper import get_session, parse_item_page, parse_listing_page
 from bot.scraper.models import (
     EXCAVATOR_SUBCATEGORIES,
     Listing,
+    grade_rank,
     looks_like_parts,
+    region_matches,
     target_subcategories,
 )
 from bot.storage.db import DB, UserFilter
@@ -68,25 +70,67 @@ def _year_int(year_raw: str | None) -> int | None:
 def matches(item: Listing, f: UserFilter) -> bool:
     # Жёсткое правило: если запчасти/навесное в глобальной настройке
     # отключены, такие лоты не должны попадать ни в /search, ни в рассылку,
-    # даже если каким-то образом просочились в карточку (бывает, что
-    # продавец публикует запчасть в подкатегории «настоящих» машин).
+    # даже если каким-то образом просочились в карточку.
     if not config.INCLUDE_PARTS and looks_like_parts(item.category_path):
         return False
-    if f.manufacturer and (item.manufacturer or "").strip() != f.manufacturer.strip():
+
+    # Производители (multi)
+    if f.manufacturers:
+        mfr = (item.manufacturer or "").strip()
+        if mfr not in {m.strip() for m in f.manufacturers}:
+            return False
+
+    # Подкатегория-размер (multi). Сравниваем по category_path leaf или
+    # по cate_code — последний у нас в item.category_path неявный, поэтому
+    # используем сверку по корейскому листу через таблицу подкатегорий.
+    if f.subcategories:
+        from bot.scraper.models import EXCAVATOR_SUBCATEGORIES as _SUBS
+        allowed_leaves = {_SUBS[c][0] for c in f.subcategories if c in _SUBS}
+        leaf = (item.category_path or "").split(">")[-1].strip()
+        if leaf not in allowed_leaves:
+            return False
+
+    # Регионы (multi, нечёткое сравнение)
+    if not region_matches(item.region, f.regions):
         return False
+
+    # Минимальный грейд
+    if f.min_grade:
+        if grade_rank(item.grade) < f.min_grade:
+            return False
+
+    # Чёрный список ключевых слов
+    if f.blacklist_keywords:
+        haystack = " ".join([
+            item.model or "", item.description or "",
+        ]).lower()
+        for bk in f.blacklist_keywords:
+            if bk and bk.strip().lower() in haystack:
+                return False
+
+    # Год выпуска
     if f.year_from or f.year_to:
         y = _year_int(item.year)
         if y is None:
-            # Без года — пропускаем, если фильтр по году выставлен.
             return False
         if f.year_from and y < f.year_from:
             return False
         if f.year_to and y > f.year_to:
             return False
+
+    # Цена
     if f.price_max_won and item.price_won and item.price_won > f.price_max_won:
         return False
-    if f.hours_max and item.hours and item.hours > f.hours_max:
+    if f.price_min_won and item.price_won and item.price_won < f.price_min_won:
         return False
+
+    # Моточасы
+    if f.skip_no_hours and item.hours is None:
+        return False
+    if f.hours_max and item.hours is not None and item.hours > f.hours_max:
+        return False
+
+    # Ключевое слово (positive search)
     if f.keyword:
         kw = f.keyword.strip().lower()
         haystack = " ".join([

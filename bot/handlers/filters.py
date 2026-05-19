@@ -66,17 +66,37 @@ def _describe(f: UserFilter) -> str:
     if f.is_empty():
         return "<i>Фильтр не задан — будут приходить все новые лоты в категории «Экскаваторы».</i>"
     rows = []
-    if f.manufacturer:
-        label = next((en for kr, en in MANUFACTURERS if kr == f.manufacturer), f.manufacturer)
-        rows.append(f"🏭 Производитель: <b>{label}</b> ({f.manufacturer})")
+    if f.manufacturers:
+        labels = []
+        for m in f.manufacturers:
+            en = next((en for kr, en in MANUFACTURERS if kr == m), m)
+            labels.append(f"{en} ({m})")
+        rows.append(f"🏭 Производитель: <b>{', '.join(labels)}</b>")
+    if f.subcategories:
+        from bot.scraper.models import EXCAVATOR_SUBCATEGORIES as _SUBS
+        names = [_SUBS[c][1] for c in f.subcategories if c in _SUBS]
+        rows.append(f"📏 Размер: <b>{', '.join(names)}</b>")
+    if f.regions:
+        from bot.scraper.models import REGION_LABELS
+        labels = [f"{REGION_LABELS.get(r, r)}" for r in f.regions]
+        rows.append(f"📍 Регион: <b>{', '.join(labels)}</b>")
+    if f.min_grade:
+        from bot.scraper.models import grade_label
+        rows.append(f"🏆 Мин. грейд: <b>{grade_label(f.min_grade)}</b>")
     if f.year_from or f.year_to:
         a = f.year_from or "—"
         b = f.year_to or "—"
         rows.append(f"📅 Год: <b>{a}…{b}</b>")
-    if f.price_max_won:
-        rows.append(f"💰 Цена ≤ <b>{f.price_max_won // 10000:,} 만원</b>".replace(",", " "))
+    if f.price_min_won or f.price_max_won:
+        a = f"{f.price_min_won // 10000} 만원" if f.price_min_won else "—"
+        b = f"{f.price_max_won // 10000} 만원" if f.price_max_won else "—"
+        rows.append(f"💰 Цена: <b>{a}…{b}</b>".replace(",", " "))
     if f.hours_max is not None:
         rows.append(f"⏱ Моточасы ≤ <b>{f.hours_max:,}</b>".replace(",", " "))
+    if f.skip_no_hours:
+        rows.append("🚫 Лоты без моточасов пропускаются")
+    if f.blacklist_keywords:
+        rows.append(f"🚫 Исключить: <b>{', '.join(f.blacklist_keywords)}</b>")
     if f.keyword:
         rows.append(f"🔍 Ключевое слово: <b>{f.keyword}</b>")
     return "\n".join(rows)
@@ -230,9 +250,10 @@ async def fsm_keyword(msg: Message, state: FSMContext) -> None:
         keyword = (msg.text or "").strip() or None
 
     data = await state.get_data()
+    mfr = data.get("manufacturer")
     f = UserFilter(
         chat_id=msg.chat.id,
-        manufacturer=data.get("manufacturer"),
+        manufacturers=[mfr] if mfr else [],
         year_from=data.get("year_from"),
         year_to=data.get("year_to"),
         price_max_won=data.get("price_max_won"),

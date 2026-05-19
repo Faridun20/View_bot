@@ -44,15 +44,29 @@ PROGRESS_EVERY = 25
 
 
 def _passes_preview(prev: ListingPreview, f: UserFilter) -> bool:
-    """Грубая отсечка по тому, что видно в превью списка БЕЗ загрузки карточки.
+    """Грубая отсечка по тому, что видно в превью БЕЗ загрузки карточки.
 
-    Возвращает False, только если ТОЧНО не подходит, иначе True (надо качать).
-    Сейчас умеем отсекать по максимальной цене.
+    Возвращает False, только если ТОЧНО не подходит — иначе True.
+    Отсекаем по: подкатегории (cate_code), мин/макс цене, грейду.
     """
-    if f.price_max_won and prev.price_raw:
+    if f.subcategories and prev.cate_code and prev.cate_code not in set(f.subcategories):
+        return False
+
+    # Цена — есть в превью списка
+    if (f.price_max_won or f.price_min_won) and prev.price_raw:
         won = _parse_price(prev.price_raw)
-        if won is not None and won > f.price_max_won:
+        if won is not None:
+            if f.price_max_won and won > f.price_max_won:
+                return False
+            if f.price_min_won and won < f.price_min_won:
+                return False
+
+    # Грейд тоже виден в превью
+    if f.min_grade and prev.grade:
+        from bot.scraper.models import grade_rank
+        if grade_rank(prev.grade) < f.min_grade:
             return False
+
     return True
 
 

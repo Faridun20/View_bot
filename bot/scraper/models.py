@@ -62,6 +62,103 @@ def looks_like_parts(category_path: str | None) -> bool:
     return leaf in PARTS_LEAF_NAMES
 
 
+# -----------------------------------------------------------------------
+# Грейд состояния (상태): A+급 / A급 / B+급 / B급
+# -----------------------------------------------------------------------
+
+GRADE_RANKS: dict[str, int] = {
+    "A+": 4, "A": 3, "B+": 2, "B": 1,
+}
+
+
+def grade_rank(grade: str | None) -> int:
+    """Числовой ранг грейда: A+ → 4, A → 3, B+ → 2, B → 1; неизвестное → 0.
+
+    На сайте грейд обычно вида 'A+급'. Убираем суффикс '급' и нормализуем.
+    """
+    if not grade:
+        return 0
+    s = grade.strip().rstrip("급").strip()
+    return GRADE_RANKS.get(s.upper(), 0)
+
+
+def grade_label(rank: int) -> str:
+    for label, r in GRADE_RANKS.items():
+        if r == rank:
+            return label + "급"
+    return "—"
+
+
+# -----------------------------------------------------------------------
+# Регионы (위치): корейские провинции и города
+# -----------------------------------------------------------------------
+
+# Канонические короткие имена. Сайт пишет '강원도', '경기', '서울특별시' и
+# подобное — будем нормализовать к этому списку.
+REGIONS: list[tuple[str, str]] = [
+    ("서울",   "Сеул"),
+    ("인천",   "Инчхон"),
+    ("경기",   "Кёнгидо"),
+    ("강원",   "Канвондо"),
+    ("충북",   "Чхунчхон-Пукто"),
+    ("충남",   "Чхунчхон-Намдо"),
+    ("대전",   "Тэджон"),
+    ("전북",   "Чолла-Пукто"),
+    ("전남",   "Чолла-Намдо"),
+    ("광주",   "Кванджу"),
+    ("경북",   "Кёнсан-Пукто"),
+    ("경남",   "Кёнсан-Намдо"),
+    ("대구",   "Тэгу"),
+    ("부산",   "Пусан"),
+    ("울산",   "Ульсан"),
+    ("제주",   "Чеджу"),
+]
+REGION_KEYS: list[str] = [k for k, _ in REGIONS]
+REGION_LABELS: dict[str, str] = dict(REGIONS)
+
+
+# Окончания, которые убираем при сравнении: 도/시/특별시/광역시/특별자치도/특별자치시
+_REGION_SUFFIXES = (
+    "특별자치도", "특별자치시", "광역시", "특별시", "도", "시",
+)
+
+
+def normalize_region(region: str | None) -> str | None:
+    """'강원도' → '강원', '서울특별시' → '서울'. Возвращает короткое имя или None."""
+    if not region:
+        return None
+    s = region.strip()
+    for suf in _REGION_SUFFIXES:
+        if s.endswith(suf) and len(s) > len(suf):
+            s = s[: -len(suf)]
+            break
+    # Иногда в карточке указано «경기 안성» (провинция + город). Берём первое слово.
+    s = s.split()[0] if s else s
+    # Сверяемся с известными ключами
+    if s in REGION_KEYS:
+        return s
+    # На сайте бывают сокращения — пытаемся найти первое совпадение по началу.
+    for key in REGION_KEYS:
+        if s.startswith(key) or key.startswith(s):
+            return key
+    return None
+
+
+def region_matches(item_region: str | None, allowed: list[str] | set[str] | None) -> bool:
+    """True, если регион лота входит в выбранный пользователем набор.
+
+    Пустой `allowed` (None или []) — фильтр выключен, пропускаем всё.
+    """
+    if not allowed:
+        return True
+    norm = normalize_region(item_region)
+    if norm is None:
+        # Регион неизвестен — лучше не отсекать, чтобы пользователь не пропустил
+        # объявление с непарсящимся регионом.
+        return True
+    return norm in set(allowed)
+
+
 @dataclass
 class ListingPreview:
     """Краткая карточка из списка подкатегории (sub8_1_s.html)."""

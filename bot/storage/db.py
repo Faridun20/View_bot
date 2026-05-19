@@ -5,8 +5,9 @@
 """
 from __future__ import annotations
 
+import json
 import sqlite3
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Iterable
@@ -14,6 +15,26 @@ from typing import Iterable
 
 def _now_iso() -> str:
     return datetime.now(timezone.utc).isoformat(timespec="seconds")
+
+
+def _dumps(value) -> str | None:
+    """JSON-сериализация для list/str с обрезкой пустых значений."""
+    if value is None:
+        return None
+    if isinstance(value, (list, tuple, set)):
+        items = [v for v in value if v]
+        return json.dumps(items, ensure_ascii=False) if items else None
+    return json.dumps(value, ensure_ascii=False)
+
+
+def _loads_list(s: str | None) -> list[str]:
+    if not s:
+        return []
+    try:
+        data = json.loads(s)
+        return [str(x) for x in data] if isinstance(data, list) else []
+    except (json.JSONDecodeError, TypeError):
+        return []
 
 
 SCHEMA = """
@@ -25,14 +46,21 @@ CREATE TABLE IF NOT EXISTS users (
 );
 
 CREATE TABLE IF NOT EXISTS filters (
-  chat_id        INTEGER PRIMARY KEY REFERENCES users(chat_id) ON DELETE CASCADE,
-  manufacturer   TEXT,       -- например '볼보' (точное название с сайта)
-  year_from      INTEGER,
-  year_to        INTEGER,
-  price_max_won  INTEGER,
-  hours_max      INTEGER,
-  keyword        TEXT,       -- substring-поиск в model + description (case-insensitive)
-  updated_at     TEXT NOT NULL
+  chat_id            INTEGER PRIMARY KEY REFERENCES users(chat_id) ON DELETE CASCADE,
+  manufacturer       TEXT,        -- LEGACY: один производитель (для совместимости со старой версией)
+  manufacturers      TEXT,        -- JSON-массив корейских названий, NULL = любой
+  subcategories      TEXT,        -- JSON-массив cate_code (например ["100100","100104"])
+  regions            TEXT,        -- JSON-массив коротких ключей регионов ("강원","경기")
+  min_grade          INTEGER,     -- ранг 1..4 (B..A+), NULL = любой
+  blacklist_keywords TEXT,        -- JSON-массив фраз-исключений
+  year_from          INTEGER,
+  year_to            INTEGER,
+  price_min_won      INTEGER,
+  price_max_won      INTEGER,
+  hours_max          INTEGER,
+  skip_no_hours      INTEGER NOT NULL DEFAULT 0,   -- 1 = не присылать лоты без часов
+  keyword            TEXT,        -- substring в model + description + manufacturer
+  updated_at         TEXT NOT NULL
 );
 
 CREATE TABLE IF NOT EXISTS seen_pids (
@@ -55,17 +83,32 @@ CREATE INDEX IF NOT EXISTS idx_seen_first_seen ON seen_pids(first_seen_at);
 @dataclass
 class UserFilter:
     chat_id: int
-    manufacturer: str | None = None
+    # Производители: пустой список = любой
+    manufacturers: list[str] = field(default_factory=list)
+    # Подкатегории (cate_code): пустой = все «машинные»
+    subcategories: list[str] = field(default_factory=list)
+    # Регионы (короткие ключи): пустой = любой
+    regions: list[str] = field(default_factory=list)
+    # Минимальный грейд (1..4): None = любой
+    min_grade: int | None = None
+    # Чёрный список — пустой = выключен
+    blacklist_keywords: list[str] = field(default_factory=list)
+
     year_from: int | None = None
     year_to: int | None = None
+    price_min_won: int | None = None
     price_max_won: int | None = None
     hours_max: int | None = None
+    skip_no_hours: bool = False
     keyword: str | None = None
 
     def is_empty(self) -> bool:
         return not any([
-            self.manufacturer, self.year_from, self.year_to,
-            self.price_max_won, self.hours_max, self.keyword,
+            self.manufacturers, self.subcategories, self.regions,
+            self.min_grade, self.blacklist_keywords,
+            self.year_from, self.year_to,
+            self.price_min_won, self.price_max_won,
+            self.hours_max, self.skip_no_hours, self.keyword,
         ])
 
 
@@ -83,6 +126,39 @@ class DB:
     def _init(self) -> None:
         with self._conn() as c:
             c.executescript(SCHEMA)
+            self._migrate(c)
+
+    def _migrate(self, c: sqlite3.Connection) -> None:
+        """Дотягиваем существующую БД до текущей схемы (ALTER TABLE по нужде).
+
+        SQLite не умеет 'IF NOT EXISTS' для колонок, поэтому смотрим вручную.
+        """
+        cols = {r["name"] for r in c.execute("PRAGMA table_info(filters)")}
+        adders = [
+            ("manufacturers",      "TEXT"),
+            ("subcategories",      "TEXT"),
+            ("regions",            "TEXT"),
+            ("min_grade",          "INTEGER"),
+            ("blacklist_keywords", "TEXT"),
+            ("price_min_won",      "INTEGER"),
+            ("skip_no_hours",      "INTEGER NOT NULL DEFAULT 0"),
+        ]
+        for name, decl in adders:
+            if name not in cols:
+                c.execute(f"ALTER TABLE filters ADD COLUMN {name} {decl}")
+
+        # Перенос старого скалярного manufacturer в JSON manufacturers
+        if "manufacturer" in cols:
+            for r in c.execute(
+                "SELECT chat_id, manufacturer, manufacturers FROM filters "
+                "WHERE manufacturer IS NOT NULL AND manufacturer != '' "
+                "AND (manufacturers IS NULL OR manufacturers = '')"
+            ):
+                c.execute(
+                    "UPDATE filters SET manufacturers = ? WHERE chat_id = ?",
+                    (json.dumps([r["manufacturer"]], ensure_ascii=False),
+                     r["chat_id"]),
+                )
 
     # ---- users -----------------------------------------------------------
 
@@ -114,13 +190,30 @@ class DB:
             r = c.execute("SELECT * FROM filters WHERE chat_id = ?", (chat_id,)).fetchone()
         if r is None:
             return UserFilter(chat_id=chat_id)
+        keys = r.keys()
+
+        def col(name, default=None):
+            return r[name] if name in keys else default
+
+        # manufacturers — может быть в JSON-колонке; если её ещё нет (старая
+        # запись), берём legacy-колонку manufacturer.
+        manufacturers = _loads_list(col("manufacturers"))
+        if not manufacturers and col("manufacturer"):
+            manufacturers = [col("manufacturer")]
+
         return UserFilter(
             chat_id=r["chat_id"],
-            manufacturer=r["manufacturer"],
+            manufacturers=manufacturers,
+            subcategories=_loads_list(col("subcategories")),
+            regions=_loads_list(col("regions")),
+            min_grade=col("min_grade"),
+            blacklist_keywords=_loads_list(col("blacklist_keywords")),
             year_from=r["year_from"],
             year_to=r["year_to"],
+            price_min_won=col("price_min_won"),
             price_max_won=r["price_max_won"],
             hours_max=r["hours_max"],
+            skip_no_hours=bool(col("skip_no_hours", 0)),
             keyword=r["keyword"],
         )
 
@@ -128,20 +221,43 @@ class DB:
         with self._conn() as c:
             c.execute(
                 """
-                INSERT INTO filters(chat_id, manufacturer, year_from, year_to,
-                                    price_max_won, hours_max, keyword, updated_at)
-                VALUES(?, ?, ?, ?, ?, ?, ?, ?)
+                INSERT INTO filters(
+                    chat_id, manufacturer, manufacturers, subcategories,
+                    regions, min_grade, blacklist_keywords,
+                    year_from, year_to, price_min_won, price_max_won,
+                    hours_max, skip_no_hours, keyword, updated_at
+                ) VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(chat_id) DO UPDATE SET
-                  manufacturer = excluded.manufacturer,
-                  year_from    = excluded.year_from,
-                  year_to      = excluded.year_to,
-                  price_max_won= excluded.price_max_won,
-                  hours_max    = excluded.hours_max,
-                  keyword      = excluded.keyword,
-                  updated_at   = excluded.updated_at
+                  manufacturer       = excluded.manufacturer,
+                  manufacturers      = excluded.manufacturers,
+                  subcategories      = excluded.subcategories,
+                  regions            = excluded.regions,
+                  min_grade          = excluded.min_grade,
+                  blacklist_keywords = excluded.blacklist_keywords,
+                  year_from          = excluded.year_from,
+                  year_to            = excluded.year_to,
+                  price_min_won      = excluded.price_min_won,
+                  price_max_won      = excluded.price_max_won,
+                  hours_max          = excluded.hours_max,
+                  skip_no_hours      = excluded.skip_no_hours,
+                  keyword            = excluded.keyword,
+                  updated_at         = excluded.updated_at
                 """,
-                (f.chat_id, f.manufacturer, f.year_from, f.year_to,
-                 f.price_max_won, f.hours_max, f.keyword, _now_iso()),
+                (
+                    f.chat_id,
+                    # legacy: первый из списка — чтобы старая колонка осталась корректной
+                    f.manufacturers[0] if f.manufacturers else None,
+                    _dumps(f.manufacturers),
+                    _dumps(f.subcategories),
+                    _dumps(f.regions),
+                    f.min_grade,
+                    _dumps(f.blacklist_keywords),
+                    f.year_from, f.year_to,
+                    f.price_min_won, f.price_max_won,
+                    f.hours_max, int(bool(f.skip_no_hours)),
+                    f.keyword,
+                    _now_iso(),
+                ),
             )
 
     def reset_filter(self, chat_id: int) -> None:

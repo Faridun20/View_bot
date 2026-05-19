@@ -27,9 +27,11 @@ router = Router(name="menu")
 
 
 class MenuInput(StatesGroup):
-    price = State()
+    price = State()       # МАКС цена
+    price_min = State()
     hours = State()
     keyword = State()
+    blacklist = State()
 
 
 # ---------- /menu ----------------------------------------------------------
@@ -57,11 +59,16 @@ def _filter_text(f: UserFilter) -> str:
         body = "<i>Фильтр пустой — будут приходить все новые экскаваторы.</i>"
     else:
         rows = [
+            f"📏 {keyboards._short_subs(f)}",
             f"🏭 {keyboards._short_mfr(f)}",
+            f"📍 {keyboards._short_region(f)}",
+            f"🏆 {keyboards._short_grade(f)}",
             f"📅 {keyboards._short_year(f)}",
             f"💰 {keyboards._short_price(f)}",
-            f"⏱ {keyboards._short_hours(f)}",
+            f"⏱ {keyboards._short_hours(f)}"
+            + ("  🚫 без часов" if f.skip_no_hours else ""),
             f"🔍 {keyboards._short_keyword(f)}",
+            f"🚫 {keyboards._short_blacklist(f)}",
         ]
         body = "\n".join(rows)
     return f"<b>⚙️ Ваш фильтр</b>\n\n{body}\n\nТапните по строке, чтобы изменить:"
@@ -139,7 +146,63 @@ async def cb_filter_reset(cb: CallbackQuery) -> None:
 
 @router.callback_query(F.data == "f:edit:m")
 async def cb_edit_mfr(cb: CallbackQuery) -> None:
-    await _edit(cb, "<b>🏭 Производитель</b>", keyboards.pick_manufacturer())
+    f = init_db(config.DB_PATH).get_filter(cb.message.chat.id)
+    await _edit(
+        cb,
+        "<b>🏭 Производитель</b>\n\nМожно выбрать <b>несколько</b>. "
+        "Нажмите чекбоксы и затем «Готово».",
+        keyboards.pick_manufacturer(f.manufacturers),
+    )
+    await cb.answer()
+
+
+@router.callback_query(F.data == "f:edit:s")
+async def cb_edit_subs(cb: CallbackQuery) -> None:
+    f = init_db(config.DB_PATH).get_filter(cb.message.chat.id)
+    await _edit(
+        cb,
+        "<b>📏 Размер экскаватора</b>\n\nВыберите одну или несколько подкатегорий. "
+        "Пусто = все размеры.",
+        keyboards.pick_subcategories(f.subcategories),
+    )
+    await cb.answer()
+
+
+@router.callback_query(F.data == "f:edit:r")
+async def cb_edit_region(cb: CallbackQuery) -> None:
+    f = init_db(config.DB_PATH).get_filter(cb.message.chat.id)
+    await _edit(
+        cb,
+        "<b>📍 Регион</b>\n\nКорейские провинции и города-метрополии. "
+        "Можно выбрать несколько.",
+        keyboards.pick_regions(f.regions),
+    )
+    await cb.answer()
+
+
+@router.callback_query(F.data == "f:edit:g")
+async def cb_edit_grade(cb: CallbackQuery) -> None:
+    f = init_db(config.DB_PATH).get_filter(cb.message.chat.id)
+    await _edit(
+        cb,
+        "<b>🏆 Минимальный грейд</b>\n\n"
+        "Грейд состояния указан в каждой карточке (상태). "
+        "A+급 — лучшее, B급 — приемлемое.",
+        keyboards.pick_grade(f.min_grade),
+    )
+    await cb.answer()
+
+
+@router.callback_query(F.data == "f:edit:b")
+async def cb_edit_blacklist(cb: CallbackQuery) -> None:
+    await _edit(
+        cb,
+        "<b>🚫 Чёрный список ключевых слов</b>\n\n"
+        "Если в названии или описании встречается слово из списка — лот не придёт.\n\n"
+        "Примеры: <code>수리품</code> (восстановленный), "
+        "<code>사고차</code> (ДТП), <code>급매</code> (срочно)",
+        keyboards.pick_blacklist(),
+    )
     await cb.answer()
 
 
@@ -153,7 +216,7 @@ async def cb_edit_year(cb: CallbackQuery) -> None:
 async def cb_edit_price(cb: CallbackQuery) -> None:
     await _edit(
         cb,
-        "<b>💰 Максимальная цена</b>\n\nв 만원 (10 000 ВОН).\n"
+        "<b>💰 Цена</b>\n\nв 만원 (10 000 ВОН).\n"
         "Например 15 000 = ~150 млн ВОН ≈ $110 000.",
         keyboards.pick_price(),
     )
@@ -165,7 +228,8 @@ async def cb_edit_hours(cb: CallbackQuery) -> None:
     await _edit(
         cb,
         "<b>⏱ Максимальные моточасы</b>\n\n"
-        "Лоты без указанных моточасов <b>всё равно</b> придут (с пометкой).",
+        "Если включить «не присылать без часов» в главном экране фильтра — "
+        "лоты с пустым полем 운행 тоже отсекутся.",
         keyboards.pick_hours(),
     )
     await cb.answer()
@@ -186,13 +250,146 @@ async def cb_edit_kw(cb: CallbackQuery) -> None:
 
 @router.callback_query(F.data.startswith("fm:"))
 async def cb_pick_mfr(cb: CallbackQuery) -> None:
+    """Multi-select производителей: fm:t:<кр> | fm:clear | fm:done"""
+    parts = cb.data.split(":")
+    db = init_db(config.DB_PATH)
+    f = db.get_filter(cb.message.chat.id)
+
+    action = parts[1]
+    if action == "t":
+        kr = parts[2]
+        if kr in f.manufacturers:
+            f.manufacturers = [m for m in f.manufacturers if m != kr]
+        else:
+            f.manufacturers = list(f.manufacturers) + [kr]
+        db.set_filter(f)
+        await _edit(cb, "<b>🏭 Производитель</b>",
+                    keyboards.pick_manufacturer(f.manufacturers))
+        await cb.answer()
+        return
+    if action == "clear":
+        f.manufacturers = []
+        db.set_filter(f)
+        await _edit(cb, "<b>🏭 Производитель</b>",
+                    keyboards.pick_manufacturer([]))
+        await cb.answer("Очищено")
+        return
+    if action == "done":
+        await _edit(cb, _filter_text(f), keyboards.filter_menu(f))
+        await cb.answer("Сохранено")
+        return
+
+
+@router.callback_query(F.data.startswith("fs:"))
+async def cb_pick_subs(cb: CallbackQuery) -> None:
+    """Multi-select подкатегорий-размеров: fs:t:<cate> | fs:clear | fs:done"""
+    parts = cb.data.split(":")
+    db = init_db(config.DB_PATH)
+    f = db.get_filter(cb.message.chat.id)
+    action = parts[1]
+    if action == "t":
+        cate = parts[2]
+        if cate in f.subcategories:
+            f.subcategories = [c for c in f.subcategories if c != cate]
+        else:
+            f.subcategories = list(f.subcategories) + [cate]
+        db.set_filter(f)
+        await _edit(cb, "<b>📏 Размер экскаватора</b>",
+                    keyboards.pick_subcategories(f.subcategories))
+        await cb.answer()
+        return
+    if action == "clear":
+        f.subcategories = []
+        db.set_filter(f)
+        await _edit(cb, "<b>📏 Размер экскаватора</b>",
+                    keyboards.pick_subcategories([]))
+        await cb.answer("Очищено")
+        return
+    if action == "done":
+        await _edit(cb, _filter_text(f), keyboards.filter_menu(f))
+        await cb.answer("Сохранено")
+        return
+
+
+@router.callback_query(F.data.startswith("fr:"))
+async def cb_pick_region(cb: CallbackQuery) -> None:
+    """Multi-select регионов: fr:t:<key> | fr:clear | fr:done"""
+    parts = cb.data.split(":")
+    db = init_db(config.DB_PATH)
+    f = db.get_filter(cb.message.chat.id)
+    action = parts[1]
+    if action == "t":
+        key = parts[2]
+        if key in f.regions:
+            f.regions = [r for r in f.regions if r != key]
+        else:
+            f.regions = list(f.regions) + [key]
+        db.set_filter(f)
+        await _edit(cb, "<b>📍 Регион</b>", keyboards.pick_regions(f.regions))
+        await cb.answer()
+        return
+    if action == "clear":
+        f.regions = []
+        db.set_filter(f)
+        await _edit(cb, "<b>📍 Регион</b>", keyboards.pick_regions([]))
+        await cb.answer("Очищено")
+        return
+    if action == "done":
+        await _edit(cb, _filter_text(f), keyboards.filter_menu(f))
+        await cb.answer("Сохранено")
+        return
+
+
+@router.callback_query(F.data.startswith("fg:"))
+async def cb_pick_grade(cb: CallbackQuery) -> None:
+    """Single-select грейда: fg:<1..4> | fg:any"""
     val = cb.data.split(":", 1)[1]
     db = init_db(config.DB_PATH)
     f = db.get_filter(cb.message.chat.id)
-    f.manufacturer = None if val == "any" else val
+    f.min_grade = None if val == "any" else int(val)
     db.set_filter(f)
     await _edit(cb, _filter_text(f), keyboards.filter_menu(f))
     await cb.answer("Сохранено")
+
+
+@router.callback_query(F.data.startswith("fb:"))
+async def cb_pick_blacklist(cb: CallbackQuery, state: FSMContext) -> None:
+    """fb:custom | fb:clear"""
+    val = cb.data.split(":", 1)[1]
+    db = init_db(config.DB_PATH)
+    f = db.get_filter(cb.message.chat.id)
+    if val == "custom":
+        await state.set_state(MenuInput.blacklist)
+        current = ", ".join(f.blacklist_keywords) if f.blacklist_keywords else "(пусто)"
+        await _edit(
+            cb,
+            "<b>🚫 Чёрный список</b>\n\n"
+            f"Текущий список: <code>{current}</code>\n\n"
+            "Введите слова через запятую — они заменят текущий список.\n"
+            "Например: <code>수리품, 사고차, 부품용</code>",
+            keyboards.back_to_filter(),
+        )
+        await cb.answer()
+        return
+    if val == "clear":
+        f.blacklist_keywords = []
+        db.set_filter(f)
+        await _edit(cb, _filter_text(f), keyboards.filter_menu(f))
+        await cb.answer("Очищено")
+        return
+
+
+@router.callback_query(F.data == "fnoh:t")
+async def cb_toggle_no_hours(cb: CallbackQuery) -> None:
+    db = init_db(config.DB_PATH)
+    f = db.get_filter(cb.message.chat.id)
+    f.skip_no_hours = not f.skip_no_hours
+    db.set_filter(f)
+    await _edit(cb, _filter_text(f), keyboards.filter_menu(f))
+    await cb.answer(
+        "Лоты без часов будут пропускаться" if f.skip_no_hours
+        else "Лоты без часов будут приходить"
+    )
 
 
 @router.callback_query(F.data.startswith("fyf:"))
@@ -220,6 +417,7 @@ async def cb_pick_year_to(cb: CallbackQuery) -> None:
 
 @router.callback_query(F.data.startswith("fp:"))
 async def cb_pick_price(cb: CallbackQuery, state: FSMContext) -> None:
+    """МАКС цена: fp:<манвон> | fp:any | fp:custom"""
     val = cb.data.split(":", 1)[1]
     db = init_db(config.DB_PATH)
     f = db.get_filter(cb.message.chat.id)
@@ -227,14 +425,46 @@ async def cb_pick_price(cb: CallbackQuery, state: FSMContext) -> None:
         await state.set_state(MenuInput.price)
         await _edit(
             cb,
-            "<b>💰 Своя цена</b>\n\n"
+            "<b>💰 Своя МАКС. цена</b>\n\n"
             "Введите число в 만원 (например <code>12500</code>).\n"
-            "Или нажмите «Назад» для отмены.",
+            "Или нажмите «Назад».",
             keyboards.back_to_filter(),
         )
         await cb.answer()
         return
     f.price_max_won = None if val == "any" else int(val) * 10_000
+    db.set_filter(f)
+    await _edit(cb, _filter_text(f), keyboards.filter_menu(f))
+    await cb.answer("Сохранено")
+
+
+@router.callback_query(F.data.startswith("fpmn:"))
+async def cb_pick_price_min(cb: CallbackQuery, state: FSMContext) -> None:
+    """МИН цена: fpmn:open (открыть экран) | fpmn:<манвон> | fpmn:any | fpmn:custom"""
+    val = cb.data.split(":", 1)[1]
+    if val == "open":
+        await _edit(
+            cb,
+            "<b>💰 Минимальная цена</b>\n\n"
+            "Отсекает откровенно копеечные лоты.",
+            keyboards.pick_price_min(),
+        )
+        await cb.answer()
+        return
+
+    db = init_db(config.DB_PATH)
+    f = db.get_filter(cb.message.chat.id)
+    if val == "custom":
+        await state.set_state(MenuInput.price_min)
+        await _edit(
+            cb,
+            "<b>💰 Своя МИН. цена</b>\n\n"
+            "Введите число в 만원 (например <code>2000</code>).",
+            keyboards.back_to_filter(),
+        )
+        await cb.answer()
+        return
+    f.price_min_won = None if val == "any" else int(val) * 10_000
     db.set_filter(f)
     await _edit(cb, _filter_text(f), keyboards.filter_menu(f))
     await cb.answer("Сохранено")
@@ -295,6 +525,37 @@ async def msg_input_price(msg: Message, state: FSMContext) -> None:
     db = init_db(config.DB_PATH)
     f = db.get_filter(msg.chat.id)
     f.price_max_won = int(digits) * 10_000
+    db.set_filter(f)
+    await state.clear()
+    await msg.answer(_filter_text(f), parse_mode="HTML",
+                     reply_markup=keyboards.filter_menu(f))
+
+
+@router.message(MenuInput.price_min)
+async def msg_input_price_min(msg: Message, state: FSMContext) -> None:
+    digits = "".join(c for c in (msg.text or "") if c.isdigit())
+    if not digits:
+        await msg.answer("Нужно положительное число (в 만원).")
+        return
+    db = init_db(config.DB_PATH)
+    f = db.get_filter(msg.chat.id)
+    f.price_min_won = int(digits) * 10_000
+    db.set_filter(f)
+    await state.clear()
+    await msg.answer(_filter_text(f), parse_mode="HTML",
+                     reply_markup=keyboards.filter_menu(f))
+
+
+@router.message(MenuInput.blacklist)
+async def msg_input_blacklist(msg: Message, state: FSMContext) -> None:
+    text = (msg.text or "").strip()
+    if not text:
+        await msg.answer("Введите слова через запятую или нажмите «Назад».")
+        return
+    items = [t.strip() for t in text.split(",") if t.strip()]
+    db = init_db(config.DB_PATH)
+    f = db.get_filter(msg.chat.id)
+    f.blacklist_keywords = items
     db.set_filter(f)
     await state.clear()
     await msg.answer(_filter_text(f), parse_mode="HTML",
