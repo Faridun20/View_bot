@@ -117,7 +117,8 @@ async def do_search(bot: Bot, chat_id: int, *, n: int, show_all: bool) -> None:
     try:
         previews = await asyncio.to_thread(_scan_with_previews)
     except Exception as e:
-        logger.exception("search: ошибка обхода")
+        logger.warning("search: ошибка обхода: %s", e)
+        logger.debug("traceback:", exc_info=True)
         await bot.send_message(chat_id, f"❌ Ошибка обхода: <code>{e}</code>", parse_mode="HTML")
         return
 

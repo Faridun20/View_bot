@@ -42,6 +42,7 @@ CREATE TABLE IF NOT EXISTS users (
   chat_id      INTEGER PRIMARY KEY,
   username     TEXT,
   active       INTEGER NOT NULL DEFAULT 1,
+  is_admin     INTEGER NOT NULL DEFAULT 0,
   created_at   TEXT NOT NULL
 );
 
@@ -85,8 +86,16 @@ CREATE TABLE IF NOT EXISTS favorites (
   PRIMARY KEY (chat_id, pid)
 );
 
+CREATE TABLE IF NOT EXISTS price_history (
+  pid          INTEGER NOT NULL,
+  recorded_at  TEXT NOT NULL,
+  price_won    INTEGER,           -- NULL если цена не распарсилась
+  PRIMARY KEY (pid, recorded_at)
+);
+
 CREATE INDEX IF NOT EXISTS idx_seen_first_seen ON seen_pids(first_seen_at);
 CREATE INDEX IF NOT EXISTS idx_fav_chat ON favorites(chat_id, added_at DESC);
+CREATE INDEX IF NOT EXISTS idx_price_pid ON price_history(pid, recorded_at DESC);
 """
 
 
@@ -112,11 +121,12 @@ class UserFilter:
     skip_no_hours: bool = False
     require_photo: bool = False
     keyword: str | None = None
+    blacklist_sellers: list[str] = field(default_factory=list)
 
     def is_empty(self) -> bool:
         return not any([
             self.manufacturers, self.subcategories, self.regions,
-            self.min_grade, self.blacklist_keywords,
+            self.min_grade, self.blacklist_keywords, self.blacklist_sellers,
             self.year_from, self.year_to,
             self.price_min_won, self.price_max_won,
             self.hours_max, self.skip_no_hours, self.require_photo,
@@ -157,6 +167,7 @@ class DB:
             ("regions",            "TEXT"),
             ("min_grade",          "INTEGER"),
             ("blacklist_keywords", "TEXT"),
+            ("blacklist_sellers",  "TEXT"),
             ("price_min_won",      "INTEGER"),
             ("skip_no_hours",      "INTEGER NOT NULL DEFAULT 0"),
             ("require_photo",      "INTEGER NOT NULL DEFAULT 0"),
@@ -164,6 +175,11 @@ class DB:
         for name, decl in adders:
             if name not in cols:
                 c.execute(f"ALTER TABLE filters ADD COLUMN {name} {decl}")
+
+        # is_admin для users (auto-admin для первого юзера)
+        user_cols = {r["name"] for r in c.execute("PRAGMA table_info(users)")}
+        if "is_admin" not in user_cols:
+            c.execute("ALTER TABLE users ADD COLUMN is_admin INTEGER NOT NULL DEFAULT 0")
 
         # Перенос старого скалярного manufacturer в JSON manufacturers
         if "manufacturer" in cols:
@@ -181,17 +197,38 @@ class DB:
     # ---- users -----------------------------------------------------------
 
     def upsert_user(self, chat_id: int, username: str | None) -> None:
+        """Создаёт/реактивирует пользователя. Если в БД ещё никого нет —
+        этот юзер автоматически становится админом (удобно для тех, кто
+        не хочет настраивать ADMIN_IDS в Railway вручную)."""
         with self._conn() as c:
+            is_first = c.execute("SELECT COUNT(*) FROM users").fetchone()[0] == 0
             c.execute(
                 """
-                INSERT INTO users(chat_id, username, active, created_at)
-                VALUES(?, ?, 1, ?)
+                INSERT INTO users(chat_id, username, active, is_admin, created_at)
+                VALUES(?, ?, 1, ?, ?)
                 ON CONFLICT(chat_id) DO UPDATE SET
                   username = excluded.username,
                   active = 1
                 """,
-                (chat_id, username, _now_iso()),
+                (chat_id, username, 1 if is_first else 0, _now_iso()),
             )
+
+    def is_admin(self, chat_id: int) -> bool:
+        with self._conn() as c:
+            r = c.execute("SELECT is_admin FROM users WHERE chat_id = ?",
+                          (chat_id,)).fetchone()
+        return bool(r and r["is_admin"])
+
+    def set_admin(self, chat_id: int, value: bool) -> None:
+        with self._conn() as c:
+            c.execute("UPDATE users SET is_admin = ? WHERE chat_id = ?",
+                      (1 if value else 0, chat_id))
+
+    def list_admins(self) -> list[int]:
+        with self._conn() as c:
+            return [r["chat_id"] for r in c.execute(
+                "SELECT chat_id FROM users WHERE is_admin = 1"
+            )]
 
     def deactivate_user(self, chat_id: int) -> None:
         with self._conn() as c:
@@ -237,6 +274,7 @@ class DB:
             regions=_loads_list(col("regions")),
             min_grade=col("min_grade"),
             blacklist_keywords=_loads_list(col("blacklist_keywords")),
+            blacklist_sellers=_loads_list(col("blacklist_sellers")),
             year_from=r["year_from"],
             year_to=r["year_to"],
             price_min_won=col("price_min_won"),
@@ -253,10 +291,10 @@ class DB:
                 """
                 INSERT INTO filters(
                     chat_id, manufacturer, manufacturers, subcategories,
-                    regions, min_grade, blacklist_keywords,
+                    regions, min_grade, blacklist_keywords, blacklist_sellers,
                     year_from, year_to, price_min_won, price_max_won,
                     hours_max, skip_no_hours, require_photo, keyword, updated_at
-                ) VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ) VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(chat_id) DO UPDATE SET
                   manufacturer       = excluded.manufacturer,
                   manufacturers      = excluded.manufacturers,
@@ -264,6 +302,7 @@ class DB:
                   regions            = excluded.regions,
                   min_grade          = excluded.min_grade,
                   blacklist_keywords = excluded.blacklist_keywords,
+                  blacklist_sellers  = excluded.blacklist_sellers,
                   year_from          = excluded.year_from,
                   year_to            = excluded.year_to,
                   price_min_won      = excluded.price_min_won,
@@ -283,6 +322,7 @@ class DB:
                     _dumps(f.regions),
                     f.min_grade,
                     _dumps(f.blacklist_keywords),
+                    _dumps(f.blacklist_sellers),
                     f.year_from, f.year_to,
                     f.price_min_won, f.price_max_won,
                     f.hours_max, int(bool(f.skip_no_hours)),
@@ -404,6 +444,58 @@ class DB:
         with self._conn() as c:
             return c.execute("SELECT COUNT(*) FROM favorites WHERE chat_id = ?",
                              (chat_id,)).fetchone()[0]
+
+    def fav_holders(self, pid: int) -> list[int]:
+        """Кто добавил pid в избранное."""
+        with self._conn() as c:
+            return [r["chat_id"] for r in c.execute(
+                "SELECT chat_id FROM favorites WHERE pid = ?", (pid,)
+            )]
+
+    # ---- price history -------------------------------------------------
+
+    def record_price(self, pid: int, price_won: int | None) -> None:
+        with self._conn() as c:
+            c.execute(
+                """INSERT INTO price_history(pid, recorded_at, price_won)
+                   VALUES(?, ?, ?) ON CONFLICT DO NOTHING""",
+                (pid, _now_iso(), price_won),
+            )
+
+    def last_price(self, pid: int) -> int | None:
+        """Последняя записанная цена для pid (None если не было)."""
+        with self._conn() as c:
+            r = c.execute(
+                "SELECT price_won FROM price_history WHERE pid = ? "
+                "ORDER BY recorded_at DESC LIMIT 1", (pid,),
+            ).fetchone()
+        return r["price_won"] if r else None
+
+    def previous_price(self, pid: int) -> int | None:
+        """Предпоследняя записанная цена (для сравнения с самой свежей)."""
+        with self._conn() as c:
+            rows = c.execute(
+                "SELECT price_won FROM price_history WHERE pid = ? "
+                "ORDER BY recorded_at DESC LIMIT 2", (pid,),
+            ).fetchall()
+        return rows[1]["price_won"] if len(rows) >= 2 else None
+
+    def price_history(self, pid: int, limit: int = 20) -> list[tuple[str, int | None]]:
+        with self._conn() as c:
+            rows = c.execute(
+                "SELECT recorded_at, price_won FROM price_history WHERE pid = ? "
+                "ORDER BY recorded_at DESC LIMIT ?", (pid, limit),
+            ).fetchall()
+        return [(r["recorded_at"], r["price_won"]) for r in rows]
+
+    # ---- получатели уведомлений о снижении цены ------------------------
+
+    def recipients_for_price_drop(self, pid: int) -> set[int]:
+        """Объединение sent.chat_id ∪ favorites.chat_id для pid."""
+        with self._conn() as c:
+            sent_rs = c.execute("SELECT chat_id FROM sent WHERE pid = ?", (pid,))
+            fav_rs  = c.execute("SELECT chat_id FROM favorites WHERE pid = ?", (pid,))
+            return {r["chat_id"] for r in sent_rs} | {r["chat_id"] for r in fav_rs}
 
 
 _db: DB | None = None

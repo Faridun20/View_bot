@@ -11,7 +11,7 @@ from typing import Iterable
 from aiogram import Bot
 
 from bot import config
-from bot.notifier import send_listing
+from bot.notifier import send_listing, send_price_drop
 from bot.scraper import get_session, parse_item_page, parse_listing_page
 from bot.scraper.models import (
     EXCAVATOR_SUBCATEGORIES,
@@ -44,7 +44,11 @@ def _scan_categories() -> dict[int, str]:
                 # ту, где впервые увидели (порядок обхода).
                 found.setdefault(prev.pid, cate_code)
         except Exception as e:
-            logger.exception("Ошибка обхода cate_code=%s: %s", cate_code, e)
+            # Сетевой/парсерный сбой по одной подкатегории — продолжаем
+            # обход остальных. Без полного traceback (шумно на проде);
+            # для отладки — поднимите LOG_LEVEL=DEBUG.
+            logger.warning("Ошибка обхода cate_code=%s: %s", cate_code, e)
+            logger.debug("traceback:", exc_info=True)
     return found
 
 
@@ -54,7 +58,8 @@ def _fetch_item(pid: int) -> Listing | None:
         resp = sess.get(f"/sub8_1_vvv.html?pid={pid}")
         return parse_item_page(resp.text, pid)
     except Exception as e:
-        logger.exception("Ошибка загрузки карточки pid=%s: %s", pid, e)
+        logger.warning("Ошибка загрузки карточки pid=%s: %s", pid, e)
+        logger.debug("traceback:", exc_info=True)
         return None
 
 
@@ -107,6 +112,12 @@ def matches(item: Listing, f: UserFilter) -> bool:
         for bk in f.blacklist_keywords:
             if bk and bk.strip().lower() in haystack:
                 return False
+
+    # Чёрный список продавцов (상호) — точное совпадение
+    if f.blacklist_sellers and item.seller:
+        seller = item.seller.strip()
+        if any(seller == bs.strip() for bs in f.blacklist_sellers if bs):
+            return False
 
     # Год выпуска
     if f.year_from or f.year_to:
@@ -190,6 +201,9 @@ async def run_scan(bot: Bot, db: DB) -> None:
             continue
 
         db.mark_seen(pid, cate)
+        # Записываем начальную цену в историю (для дальнейших сравнений).
+        if item.price_won:
+            db.record_price(pid, item.price_won)
 
         for chat_id in users:
             f = user_filters[chat_id]
@@ -204,7 +218,55 @@ async def run_scan(bot: Bot, db: DB) -> None:
             # Telegram-rate-limit: 30 сообщений/сек глобально, 1/сек на чат.
             await asyncio.sleep(0.05)
 
-    logger.info("Сканирование завершено: отправлено %d сообщений", total_sent)
+    # === Проверка изменений цен на уже виденных лотах ===
+    # Парсим карточки топ-N свежих pid, которые сейчас на сайте и которые
+    # бот раньше уже обрабатывал. Если цена ↓ — уведомляем всех, кому лот
+    # ранее отсылали ИЛИ у кого он в избранном.
+    price_alerts = await _check_price_drops(bot, db, found)
+    logger.info("Сканирование завершено: новых %d, уведомлений о цене %d",
+                total_sent, price_alerts)
+
+
+async def _check_price_drops(bot: Bot, db: DB, found: dict[int, str]) -> int:
+    """Перепроверяет топ-N свежих лотов из found, которые уже в seen_pids.
+
+    Возвращает число отправленных уведомлений о снижении цены.
+    """
+    # Берём только те pid из текущего «found», которые уже знакомы боту.
+    candidates = [pid for pid in sorted(found, reverse=True) if db.is_seen(pid)]
+    candidates = candidates[: config.PRICE_CHECK_TOP_N]
+    if not candidates:
+        return 0
+
+    logger.info("price_check: перепроверяю %d уже виденных лотов", len(candidates))
+    sent_alerts = 0
+    for pid in candidates:
+        item = await asyncio.to_thread(_fetch_item, pid)
+        if item is None or not item.price_won:
+            continue
+        # Если в карточке вылез не-машинный лот — пропускаем (защита).
+        if not config.INCLUDE_PARTS and looks_like_parts(item.category_path):
+            continue
+        prev = db.last_price(pid)
+        if prev is None:
+            db.record_price(pid, item.price_won)
+            continue
+        if item.price_won == prev:
+            continue
+        # Цена изменилась — записываем в историю
+        db.record_price(pid, item.price_won)
+        if item.price_won >= prev:
+            continue   # повышение — не уведомляем
+        # Снижение → шлём подписанным
+        recipients = db.recipients_for_price_drop(pid)
+        for chat_id in recipients:
+            if not db.is_active(chat_id):
+                continue
+            ok = await send_price_drop(bot, chat_id, item, prev)
+            if ok:
+                sent_alerts += 1
+            await asyncio.sleep(0.05)
+    return sent_alerts
 
 
 async def seed_seen(db: DB, *, take: int) -> None:

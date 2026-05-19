@@ -21,13 +21,29 @@ from bot.scraper.models import EXCAVATOR_SUBCATEGORIES, Listing
 logger = logging.getLogger(__name__)
 
 
+def _listing_kb(pid: int, *, is_fav: bool, seller: str | None) -> InlineKeyboardMarkup:
+    """Inline-кнопки под карточкой лота.
+
+    Строка 1: «🔖 В избранное» / «❌ Убрать из избранного»
+    Строка 2 (опционально): «🚫 Скрывать <продавец>» — если известен seller
+    """
+    fav_label = "❌ Убрать из избранного" if is_fav else "🔖 В избранное"
+    fav_cb = f"fav:del:{pid}" if is_fav else f"fav:add:{pid}"
+    rows = [[InlineKeyboardButton(text=fav_label, callback_data=fav_cb)]]
+    if seller:
+        # Telegram callback_data <=64 байт. seller в карточке — короткое имя
+        # (대전어태치먼트 и т.п.), но всё равно подстрахуемся: храним только
+        # pid и в обработчике достаём seller повторно из карточки.
+        rows.append([InlineKeyboardButton(
+            text=f"🚫 Скрывать «{seller[:20]}»",
+            callback_data=f"bl:seller:{pid}",
+        )])
+    return InlineKeyboardMarkup(inline_keyboard=rows)
+
+
+# Алиас для обратной совместимости (favorites.py ещё ссылается на _favorite_kb)
 def _favorite_kb(pid: int, is_fav: bool) -> InlineKeyboardMarkup:
-    """Inline-клавиатура: одна кнопка «🔖 В избранное» или «❌ Удалить»."""
-    label = "❌ Убрать из избранного" if is_fav else "🔖 В избранное"
-    cb = f"fav:del:{pid}" if is_fav else f"fav:add:{pid}"
-    return InlineKeyboardMarkup(
-        inline_keyboard=[[InlineKeyboardButton(text=label, callback_data=cb)]]
-    )
+    return _listing_kb(pid, is_fav=is_fav, seller=None)
 
 
 def format_listing(item: Listing) -> str:
@@ -83,6 +99,45 @@ def format_listing(item: Listing) -> str:
     return "\n".join(lines)
 
 
+async def send_price_drop(bot: Bot, chat_id: int, item: Listing,
+                          prev_price_won: int) -> bool:
+    """Уведомление о снижении цены на уже виденном лоте."""
+    new_won = item.price_won or 0
+    if not new_won or new_won >= prev_price_won:
+        return False
+    delta = prev_price_won - new_won
+    pct = round(delta * 100 / prev_price_won) if prev_price_won else 0
+    model = item.model or "—"
+    grade = item.grade or "—"
+    text = (
+        f"💰 <b>Снижение цены — {pct}%</b>\n\n"
+        f"<b>{html.escape(model)}</b>  ·  {html.escape(grade)}\n"
+        f"🏭 {html.escape(item.manufacturer or '—')}\n"
+        f"📅 {html.escape(item.year or '—')}\n"
+        f"📍 {html.escape(item.region or '—')}\n\n"
+        f"Было: <s>{prev_price_won // 1_000_000} млн ВОН</s>\n"
+        f"Стало: <b>{new_won // 1_000_000} млн ВОН</b>\n\n"
+        f'🔗 <a href="{item.url}">Открыть на сайте</a>'
+    )
+    try:
+        await bot.send_message(
+            chat_id, text, parse_mode=ParseMode.HTML,
+            disable_web_page_preview=True,
+        )
+        return True
+    except TelegramForbiddenError:
+        try:
+            from bot import config
+            from bot.storage import init_db
+            init_db(config.DB_PATH).set_active(chat_id, False)
+        except Exception:
+            pass
+        return False
+    except TelegramAPIError as e:
+        logger.warning("price_drop: чат %s, pid %s: %s", chat_id, item.pid, e)
+        return False
+
+
 async def send_listing(bot: Bot, chat_id: int, item: Listing) -> bool:
     """Отправить карточку лота. True = успех, False = ошибка.
 
@@ -101,7 +156,11 @@ async def send_listing(bot: Bot, chat_id: int, item: Listing) -> bool:
     photo = item.main_photo()
     # Текущее состояние избранного для этого юзера — определяет подпись
     db = init_db(config.DB_PATH)
-    kb = _favorite_kb(item.pid, db.is_favorite(chat_id, item.pid))
+    kb = _listing_kb(
+        item.pid,
+        is_fav=db.is_favorite(chat_id, item.pid),
+        seller=item.seller,
+    )
 
     async def _do_send() -> None:
         if photo:

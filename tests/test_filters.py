@@ -78,6 +78,19 @@ def test_filter_blacklist_in_description(good):
     assert matches(good, f)         # у good в описании нет "수리품"
 
 
+def test_filter_blacklist_sellers(good):
+    spam = Listing(pid=99, url="x", category_path=good.category_path,
+                   manufacturer="볼보", year="2022.01", region="경기도",
+                   seller="대전어태치먼트")
+    f = UserFilter(chat_id=1, blacklist_sellers=["대전어태치먼트"])
+    assert not matches(spam, f)
+    # Точное совпадение — другой продавец проходит
+    other = Listing(pid=100, url="x", category_path=good.category_path,
+                    manufacturer="볼보", year="2022.01", region="경기도",
+                    seller="대전어태치먼트2")
+    assert matches(other, f)
+
+
 def test_filter_price_max_min(good):
     f = UserFilter(chat_id=1, price_max_won=150_000_000)
     assert matches(good, f)         # 100M < 150M

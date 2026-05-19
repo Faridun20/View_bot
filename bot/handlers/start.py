@@ -88,7 +88,8 @@ async def cmd_test(msg: Message) -> None:
     try:
         item = await asyncio.to_thread(_fetch_latest)
     except Exception as e:
-        logger.exception("test: ошибка")
+        logger.warning("test: ошибка: %s", e)
+        logger.debug("traceback:", exc_info=True)
         await msg.answer(f"❌ Ошибка: <code>{e}</code>", parse_mode="HTML")
         return
 

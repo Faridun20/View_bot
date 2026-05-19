@@ -47,6 +47,11 @@ MAX_NOTIFICATIONS_PER_RUN = int(_env("MAX_NOTIFICATIONS_PER_RUN", "0") or 0)  # 
 # seen_pids чистить нельзя, иначе старые лоты вернутся в поток.
 SENT_RETENTION_DAYS = int(_env("SENT_RETENTION_DAYS", "90") or 90)
 
+# Сколько ранее виденных лотов перепроверять на каждом scan'е — для
+# отслеживания снижений цены. ~30 даёт хорошее покрытие свежих, не
+# съедая много времени scan'а (30 * 0.5 сек = 15 сек).
+PRICE_CHECK_TOP_N = int(_env("PRICE_CHECK_TOP_N", "30") or 30)
+
 # Healthcheck-сервер (для Railway). Если переменная PORT задана — поднимаем
 # минимальный HTTP-сервер на /health (он не блокирует polling-бота).
 HEALTHCHECK_PORT = int(_env("PORT", "0") or _env("HEALTHCHECK_PORT", "0") or 0)

@@ -47,6 +47,48 @@ async def cb_fav_del(cb: CallbackQuery) -> None:
                     show_alert=False)
 
 
+@router.callback_query(F.data.startswith("bl:seller:"))
+async def cb_blacklist_seller(cb: CallbackQuery) -> None:
+    """Добавить продавца текущей карточки в чёрный список юзера.
+
+    Имя продавца берём заново из карточки сайта — кнопка callback_data
+    хранит только pid (лимит 64 байта).
+    """
+    pid = int(cb.data.split(":")[2])
+    item = await asyncio.to_thread(_fetch_item, pid)
+    if item is None or not item.seller:
+        await cb.answer("Не нашёл продавца в карточке", show_alert=True)
+        return
+    seller = item.seller.strip()
+    db = init_db(config.DB_PATH)
+    f = db.get_filter(cb.message.chat.id)
+    if seller in f.blacklist_sellers:
+        await cb.answer(f"«{seller}» уже в чёрном списке", show_alert=False)
+        return
+    f.blacklist_sellers = list(f.blacklist_sellers) + [seller]
+    db.set_filter(f)
+    await cb.answer(
+        f"🚫 «{seller}» добавлен в чёрный список. /myfilter — посмотреть.",
+        show_alert=True,
+    )
+
+
+@router.message(Command("unblock_sellers"))
+async def cmd_unblock_sellers(msg: Message) -> None:
+    """Очистить чёрный список продавцов."""
+    db = init_db(config.DB_PATH)
+    f = db.get_filter(msg.chat.id)
+    if not f.blacklist_sellers:
+        await msg.answer("Чёрный список продавцов и так пуст.")
+        return
+    sellers = list(f.blacklist_sellers)
+    f.blacklist_sellers = []
+    db.set_filter(f)
+    await msg.answer(
+        "✅ Разблокировано:\n• " + "\n• ".join(sellers),
+    )
+
+
 @router.message(Command("favs"))
 async def cmd_favs(msg: Message) -> None:
     """Прислать всё избранное (свежими карточками)."""

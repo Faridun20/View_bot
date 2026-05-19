@@ -98,7 +98,9 @@ def _describe(f: UserFilter) -> str:
     if f.require_photo:
         rows.append("📷 Только лоты с фото")
     if f.blacklist_keywords:
-        rows.append(f"🚫 Исключить: <b>{', '.join(f.blacklist_keywords)}</b>")
+        rows.append(f"🚫 Исключить слова: <b>{', '.join(f.blacklist_keywords)}</b>")
+    if f.blacklist_sellers:
+        rows.append(f"🚫 Скрытые продавцы: <b>{', '.join(f.blacklist_sellers)}</b>")
     if f.keyword:
         rows.append(f"🔍 Ключевое слово: <b>{f.keyword}</b>")
     return "\n".join(rows)

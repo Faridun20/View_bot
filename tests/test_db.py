@@ -127,3 +127,59 @@ def test_favorites_crud(isolated_db):
     assert db.remove_favorite(1, 200)
     assert not db.remove_favorite(1, 200)
     assert db.count_favorites(1) == 2
+
+
+def test_auto_admin_first_user(isolated_db):
+    db = isolated_db
+    # БД пустая → первый юзер становится админом
+    db.upsert_user(111, "first")
+    assert db.is_admin(111)
+    # Второй — нет
+    db.upsert_user(222, "second")
+    assert not db.is_admin(222)
+    assert db.list_admins() == [111]
+    # Можно явно сделать админом
+    db.set_admin(222, True)
+    assert db.is_admin(222)
+    assert set(db.list_admins()) == {111, 222}
+    db.set_admin(111, False)
+    assert not db.is_admin(111)
+
+
+def test_blacklist_sellers_roundtrip(isolated_db):
+    db = isolated_db
+    db.upsert_user(1, "u")
+    f = UserFilter(chat_id=1, blacklist_sellers=["대전어태치먼트", "기타"])
+    db.set_filter(f)
+    got = db.get_filter(1)
+    assert got.blacklist_sellers == ["대전어태치먼트", "기타"]
+
+
+def test_price_history(isolated_db):
+    db = isolated_db
+    import time
+    db.record_price(123, 50_000_000)
+    time.sleep(1.1)               # чтобы recorded_at различался (секунды)
+    db.record_price(123, 45_000_000)
+    time.sleep(1.1)
+    db.record_price(123, 40_000_000)
+    assert db.last_price(123) == 40_000_000
+    assert db.previous_price(123) == 45_000_000
+    hist = db.price_history(123)
+    assert len(hist) == 3
+    # ORDER BY recorded_at DESC — свежие первыми
+    assert hist[0][1] == 40_000_000
+
+
+def test_recipients_for_price_drop(isolated_db):
+    db = isolated_db
+    db.upsert_user(1, "a")
+    db.upsert_user(2, "b")
+    db.upsert_user(3, "c")
+    # 1 — получал sent
+    db.mark_sent(1, 999)
+    # 2 — добавил в избранное
+    db.add_favorite(2, 999)
+    # 3 — ничего
+    recipients = db.recipients_for_price_drop(999)
+    assert recipients == {1, 2}

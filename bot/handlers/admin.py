@@ -23,9 +23,17 @@ router = Router(name="admin")
 
 
 def _is_admin(msg: Message) -> bool:
+    """True если юзер указан в env ADMIN_IDS ИЛИ имеет флаг is_admin в БД
+    (auto-admin для первого подписчика, см. db.upsert_user)."""
     if not msg.from_user:
         return False
-    return msg.from_user.id in set(config.ADMIN_IDS)
+    uid = msg.from_user.id
+    if uid in set(config.ADMIN_IDS):
+        return True
+    try:
+        return init_db(config.DB_PATH).is_admin(uid)
+    except Exception:
+        return False
 
 
 @router.message(Command("users"))
