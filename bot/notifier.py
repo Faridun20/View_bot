@@ -14,10 +14,20 @@ from aiogram.exceptions import (
     TelegramForbiddenError,
     TelegramRetryAfter,
 )
+from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
 
 from bot.scraper.models import EXCAVATOR_SUBCATEGORIES, Listing
 
 logger = logging.getLogger(__name__)
+
+
+def _favorite_kb(pid: int, is_fav: bool) -> InlineKeyboardMarkup:
+    """Inline-клавиатура: одна кнопка «🔖 В избранное» или «❌ Удалить»."""
+    label = "❌ Убрать из избранного" if is_fav else "🔖 В избранное"
+    cb = f"fav:del:{pid}" if is_fav else f"fav:add:{pid}"
+    return InlineKeyboardMarkup(
+        inline_keyboard=[[InlineKeyboardButton(text=label, callback_data=cb)]]
+    )
 
 
 def format_listing(item: Listing) -> str:
@@ -78,29 +88,40 @@ async def send_listing(bot: Bot, chat_id: int, item: Listing) -> bool:
 
     Если юзер заблокировал бота — деактивируем его (не будем долбить
     каждый scan). Локальный импорт DB — чтобы не плодить циклы.
+
+    Под карточкой — inline-кнопка «🔖 В избранное» (или «❌ Убрать», если
+    лот уже в избранном).
     """
     import asyncio
 
+    from bot import config
+    from bot.storage import init_db
+
     text = format_listing(item)
     photo = item.main_photo()
+    # Текущее состояние избранного для этого юзера — определяет подпись
+    db = init_db(config.DB_PATH)
+    kb = _favorite_kb(item.pid, db.is_favorite(chat_id, item.pid))
 
     async def _do_send() -> None:
         if photo:
             if len(text) <= 1024:
                 await bot.send_photo(
                     chat_id=chat_id, photo=photo, caption=text,
-                    parse_mode=ParseMode.HTML,
+                    parse_mode=ParseMode.HTML, reply_markup=kb,
                 )
             else:
                 await bot.send_photo(chat_id=chat_id, photo=photo)
                 await bot.send_message(
                     chat_id=chat_id, text=text,
                     parse_mode=ParseMode.HTML, disable_web_page_preview=True,
+                    reply_markup=kb,
                 )
         else:
             await bot.send_message(
                 chat_id=chat_id, text=text,
                 parse_mode=ParseMode.HTML, disable_web_page_preview=True,
+                reply_markup=kb,
             )
 
     try:

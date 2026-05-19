@@ -77,7 +77,16 @@ CREATE TABLE IF NOT EXISTS sent (
   PRIMARY KEY (chat_id, pid)
 );
 
+CREATE TABLE IF NOT EXISTS favorites (
+  chat_id    INTEGER NOT NULL,
+  pid        INTEGER NOT NULL,
+  added_at   TEXT NOT NULL,
+  note       TEXT,
+  PRIMARY KEY (chat_id, pid)
+);
+
 CREATE INDEX IF NOT EXISTS idx_seen_first_seen ON seen_pids(first_seen_at);
+CREATE INDEX IF NOT EXISTS idx_fav_chat ON favorites(chat_id, added_at DESC);
 """
 
 
@@ -354,6 +363,47 @@ class DB:
         with self._conn() as c:
             cur = c.execute("DELETE FROM sent WHERE sent_at < ?", (cutoff,))
             return cur.rowcount
+
+    # ---- favorites -----------------------------------------------------
+
+    def add_favorite(self, chat_id: int, pid: int, note: str | None = None) -> bool:
+        """True если добавили (раньше не было), False если уже было."""
+        with self._conn() as c:
+            cur = c.execute(
+                """INSERT INTO favorites(chat_id, pid, added_at, note)
+                   VALUES(?, ?, ?, ?) ON CONFLICT DO NOTHING""",
+                (chat_id, pid, _now_iso(), note),
+            )
+            return cur.rowcount > 0
+
+    def remove_favorite(self, chat_id: int, pid: int) -> bool:
+        with self._conn() as c:
+            cur = c.execute("DELETE FROM favorites WHERE chat_id = ? AND pid = ?",
+                            (chat_id, pid))
+            return cur.rowcount > 0
+
+    def is_favorite(self, chat_id: int, pid: int) -> bool:
+        with self._conn() as c:
+            r = c.execute("SELECT 1 FROM favorites WHERE chat_id = ? AND pid = ?",
+                          (chat_id, pid)).fetchone()
+        return r is not None
+
+    def list_favorites(self, chat_id: int, limit: int = 50) -> list[int]:
+        # tie-break по pid DESC: при равном added_at (timespec=seconds) лоты,
+        # добавленные в одну секунду, всё равно идут в детерминированном
+        # порядке (новые pid обычно появились позже).
+        with self._conn() as c:
+            rows = c.execute(
+                "SELECT pid FROM favorites WHERE chat_id = ? "
+                "ORDER BY added_at DESC, pid DESC LIMIT ?",
+                (chat_id, limit),
+            ).fetchall()
+        return [r["pid"] for r in rows]
+
+    def count_favorites(self, chat_id: int) -> int:
+        with self._conn() as c:
+            return c.execute("SELECT COUNT(*) FROM favorites WHERE chat_id = ?",
+                             (chat_id,)).fetchone()[0]
 
 
 _db: DB | None = None
