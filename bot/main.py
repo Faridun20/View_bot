@@ -13,6 +13,7 @@ from apscheduler.triggers.interval import IntervalTrigger
 
 from bot import config
 from bot.handlers import build_root_router
+from bot.healthcheck import start_healthcheck
 from bot.monitor import run_scan, seed_seen
 from bot.scraper.client import CupidSession
 from bot.storage import init_db
@@ -61,14 +62,31 @@ async def main() -> None:
         next_run_time=None,             # первый запуск через interval, не сразу
         max_instances=1, coalesce=True,
     )
+
+    # Раз в сутки чистим старые sent — sent растёт линейно от трафика,
+    # после 90 дней эти записи не имеют смысла (юзер не помнит лот).
+    async def _cleanup() -> None:
+        removed = await asyncio.to_thread(db.cleanup_old_sent, config.SENT_RETENTION_DAYS)
+        log.info("cleanup_old_sent: удалено %d записей старше %d дней",
+                 removed, config.SENT_RETENTION_DAYS)
+
+    scheduler.add_job(_cleanup, IntervalTrigger(hours=24), id="cleanup",
+                      max_instances=1, coalesce=True)
+
     scheduler.start()
-    log.info("Планировщик запущен: каждые %d мин", config.MONITOR_INTERVAL_MINUTES)
+    log.info("Планировщик запущен: scan каждые %d мин, cleanup каждые 24ч",
+             config.MONITOR_INTERVAL_MINUTES)
+
+    # Healthcheck: только если задан HEALTHCHECK_PORT/PORT (например, на Railway).
+    health_runner = await start_healthcheck(db, config.HEALTHCHECK_PORT)
 
     log.info("Стартую long-polling")
     try:
         await dp.start_polling(bot, allowed_updates=dp.resolve_used_update_types())
     finally:
         scheduler.shutdown(wait=False)
+        if health_runner is not None:
+            await health_runner.cleanup()
         await bot.session.close()
 
 

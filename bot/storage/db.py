@@ -8,7 +8,7 @@ from __future__ import annotations
 import json
 import sqlite3
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Iterable
 
@@ -345,6 +345,14 @@ class DB:
         Возвращает число удалённых записей."""
         with self._conn() as c:
             cur = c.execute("DELETE FROM sent WHERE chat_id = ?", (chat_id,))
+            return cur.rowcount
+
+    def cleanup_old_sent(self, days: int = 90) -> int:
+        """Удалить записи sent старше N дней. seen_pids НЕ трогаем —
+        иначе старые лоты могут вернуться в поток уведомлений."""
+        cutoff = (datetime.now(timezone.utc) - timedelta(days=days)).isoformat(timespec="seconds")
+        with self._conn() as c:
+            cur = c.execute("DELETE FROM sent WHERE sent_at < ?", (cutoff,))
             return cur.rowcount
 
 

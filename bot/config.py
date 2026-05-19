@@ -43,6 +43,17 @@ MONITOR_INTERVAL_MINUTES = int(_env("MONITOR_INTERVAL_MINUTES", "60") or 60)
 # Защита от первичного потопа теперь полностью на SEED_RECENT_LOTS.
 MAX_NOTIFICATIONS_PER_RUN = int(_env("MAX_NOTIFICATIONS_PER_RUN", "0") or 0)  # 0 = не использовать
 
+# Сколько дней хранить записи в таблице sent. После — авто-cleanup.
+# seen_pids чистить нельзя, иначе старые лоты вернутся в поток.
+SENT_RETENTION_DAYS = int(_env("SENT_RETENTION_DAYS", "90") or 90)
+
+# Healthcheck-сервер (для Railway). Если переменная PORT задана — поднимаем
+# минимальный HTTP-сервер на /health (он не блокирует polling-бота).
+HEALTHCHECK_PORT = int(_env("PORT", "0") or _env("HEALTHCHECK_PORT", "0") or 0)
+
+# Telegram ID администраторов через запятую — могут /users и /broadcast.
+# Пример: ADMIN_IDS=123456789,987654321
+
 # Сколько лотов из истории «зачесть как уже виденные» при первом запуске,
 # чтобы не спамить старыми объявлениями.
 SEED_RECENT_LOTS = int(_env("SEED_RECENT_LOTS", "200") or 200)

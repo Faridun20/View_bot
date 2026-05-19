@@ -19,7 +19,13 @@ BASE = "https://www.4396200.com"
 PID_RE = re.compile(r"sub8_1_vvv\.html\?pid=(\d+)")
 
 # «6,000만원» → 60 000 000 KRW. 만원 = 10 000 ВОН.
-PRICE_RE = re.compile(r"([\d,]+)\s*만원")
+# «1.3억» → 130 000 000 KRW. 억 = 100 000 000 ВОН (1 oku).
+# Может встретиться комбо: «1억3천만원» = 1*1e8 + 3*1e7 = 130 000 000.
+PRICE_RE_MANWON = re.compile(r"([\d,]+(?:\.\d+)?)\s*만원")
+PRICE_RE_EOK = re.compile(r"([\d,]+(?:\.\d+)?)\s*억")
+PRICE_RE_CHEONMAN = re.compile(r"([\d,]+(?:\.\d+)?)\s*천만")
+# Legacy alias — где-то ещё используется для проверки «есть ли что-то про цену»
+PRICE_RE = PRICE_RE_MANWON
 
 # «운행» может быть «5000hr», «5000h», «5000시간», «5,000 hours», «5000H/r»…
 HOURS_RE = re.compile(r"([\d,\.]+)\s*(?:h|hr|hour|시간|H/?r|시)", re.IGNORECASE)
@@ -180,16 +186,40 @@ def parse_item_page(html: str, pid: int) -> Listing:
 # ---------- helpers ---------------------------------------------------------
 
 def _parse_price(raw: str | None) -> int | None:
+    """Парс корейской цены: 만원/억/천만 или их комбинации.
+
+    Примеры:
+      "6,000만원"   → 60_000_000
+      "1.3억"       → 130_000_000
+      "1억3천만원"   → 130_000_000   (1억 + 3천만 = 1e8 + 3e7)
+      "2억5,000만원" → 250_000_000
+    """
     if not raw:
         return None
-    m = PRICE_RE.search(raw)
-    if not m:
-        return None
-    digits = m.group(1).replace(",", "")
-    try:
-        return int(digits) * 10000   # 만원 → ВОН
-    except ValueError:
-        return None
+    total = 0
+    matched = False
+    # 억 (oku, 1e8) — может быть дробным («1.3억»)
+    for m in PRICE_RE_EOK.finditer(raw):
+        try:
+            total += int(float(m.group(1).replace(",", "")) * 100_000_000)
+            matched = True
+        except ValueError:
+            pass
+    # 천만 (1e7) — иногда пишут «3천만» вместо «3000만원»
+    for m in PRICE_RE_CHEONMAN.finditer(raw):
+        try:
+            total += int(float(m.group(1).replace(",", "")) * 10_000_000)
+            matched = True
+        except ValueError:
+            pass
+    # 만원 (1e4) — основной формат
+    for m in PRICE_RE_MANWON.finditer(raw):
+        try:
+            total += int(float(m.group(1).replace(",", "")) * 10_000)
+            matched = True
+        except ValueError:
+            pass
+    return total if matched else None
 
 
 def _parse_hours(raw: str | None) -> int | None:
