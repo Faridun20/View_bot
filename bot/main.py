@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+from datetime import datetime, timedelta, timezone
 
 from aiogram import Bot, Dispatcher
 from aiogram.client.default import DefaultBotProperties
@@ -56,10 +57,14 @@ async def main() -> None:
     await seed_seen(db, take=config.SEED_RECENT_LOTS)
 
     scheduler = AsyncIOScheduler(timezone="UTC")
+    # Первый запуск — через 10 сек после старта, дальше каждые
+    # MONITOR_INTERVAL_MINUTES. Без этого после каждого рестарта Railway
+    # бот молчал бы час, пока IntervalTrigger не вычислит первый момент.
+    first_run = datetime.now(timezone.utc) + timedelta(seconds=10)
     scheduler.add_job(
         run_scan, IntervalTrigger(minutes=config.MONITOR_INTERVAL_MINUTES),
         kwargs={"bot": bot, "db": db}, id="scan",
-        next_run_time=None,             # первый запуск через interval, не сразу
+        next_run_time=first_run,
         max_instances=1, coalesce=True,
     )
 

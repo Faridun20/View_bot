@@ -86,3 +86,22 @@ async def cmd_stats(msg: Message) -> None:
         f"• ADMIN_IDS: {len(config.ADMIN_IDS)} админов\n"
     )
     await msg.answer(text, parse_mode="HTML")
+
+
+@router.message(Command("scan_now"))
+async def cmd_scan_now(msg: Message) -> None:
+    """Форсировать запуск почасового сканирования прямо сейчас."""
+    if not _is_admin(msg):
+        return
+    await msg.answer("🚀 Запускаю принудительный scan…")
+    # Импорт здесь — чтобы не плодить циклы (monitor → notifier → db → ...)
+    from bot.monitor import run_scan
+    db = init_db(config.DB_PATH)
+    try:
+        await run_scan(msg.bot, db)
+        await msg.answer("✅ Scan завершён. Если ничего не пришло — значит "
+                         "новых лотов в каталоге не появилось (или фильтр у "
+                         "юзеров не совпал).")
+    except Exception as e:
+        logger.exception("scan_now failed")
+        await msg.answer(f"❌ Ошибка: <code>{e}</code>", parse_mode="HTML")

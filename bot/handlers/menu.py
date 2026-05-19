@@ -317,7 +317,11 @@ async def cb_pick_mfr(cb: CallbackQuery) -> None:
 
 @router.callback_query(F.data.startswith("fs:"))
 async def cb_pick_subs(cb: CallbackQuery) -> None:
-    """Multi-select подкатегорий-размеров: fs:t:<cate> | fs:clear | fs:done"""
+    """Multi-select подкатегорий-размеров.
+
+    Callback'и: fs:t:<cate> | fs:clear | fs:done |
+                fs:chassis:wheeled | fs:chassis:tracked
+    """
     parts = cb.data.split(":")
     db = init_db(config.DB_PATH)
     f = db.get_filter(cb.message.chat.id)
@@ -339,6 +343,23 @@ async def cb_pick_subs(cb: CallbackQuery) -> None:
         await _edit(cb, "<b>📏 Размер экскаватора</b>",
                     keyboards.pick_subcategories([]))
         await cb.answer("Очищено")
+        return
+    if action == "chassis":
+        # Shortcut: переписать набор подкатегорий по типу хода
+        kind = parts[2]
+        if kind == "wheeled":
+            f.subcategories = list(keyboards.WHEELED_SUBCATEGORIES)
+            note = "🛞 Только колёсные"
+        elif kind == "tracked":
+            f.subcategories = list(keyboards.TRACKED_SUBCATEGORIES)
+            note = "🦂 Только гусеничные"
+        else:
+            await cb.answer()
+            return
+        db.set_filter(f)
+        await _edit(cb, f"<b>📏 Размер экскаватора</b>\n\n{note} ✅",
+                    keyboards.pick_subcategories(f.subcategories))
+        await cb.answer(note)
         return
     if action == "done":
         await _edit(cb, _filter_text(f), keyboards.filter_menu(f))

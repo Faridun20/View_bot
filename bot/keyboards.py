@@ -124,19 +124,39 @@ def pick_manufacturer(selected: list[str]) -> InlineKeyboardMarkup:
 
 
 def pick_subcategories(selected: list[str]) -> InlineKeyboardMarkup:
-    """Multi-select: подкатегории-размеры экскаваторов."""
+    """Multi-select: подкатегории-размеры экскаваторов.
+
+    Сверху — две shortcut-кнопки для быстрого выбора «только колёсные»
+    (100105) или «только гусеничные» (100100-100104). Они переписывают
+    набор одним кликом.
+    """
     selected_set = set(selected)
     rows: list[list[InlineKeyboardButton]] = []
-    # Показываем только «машинные» подкатегории
+
+    # Shortcuts по типу хода
+    rows.append([
+        _btn("🛞 Только колёсные",   "fs:chassis:wheeled"),
+        _btn("🦂 Только гусеничные", "fs:chassis:tracked"),
+    ])
+
+    # Сами подкатегории-размеры (только «машинные»)
     for cate, (kr, ru) in EXCAVATOR_SUBCATEGORIES.items():
         if cate in PARTS_SUBCATEGORIES:
             continue
         mark = "☑️" if cate in selected_set else "▫️"
-        rows.append([_btn(f"{mark} {ru}", f"fs:t:{cate}")])
+        # 🛞 — визуальный маркер колёсных (чтобы было видно в общем списке)
+        icon = " 🛞" if cate == "100105" else ""
+        rows.append([_btn(f"{mark} {ru}{icon}", f"fs:t:{cate}")])
+
     rows.append([_btn("❌ Очистить (все размеры)", "fs:clear"),
                  _btn("✅ Готово", "fs:done")])
     rows.append([_btn("← Назад", "m:filter")])
     return _kb(*rows)
+
+
+# cate_code-ы для shortcut'ов по типу хода
+WHEELED_SUBCATEGORIES = ["100105"]                    # 굴삭기타이어식 — колёсные
+TRACKED_SUBCATEGORIES = ["100100", "100101", "100102", "100103", "100104"]
 
 
 def pick_regions(selected: list[str]) -> InlineKeyboardMarkup:
