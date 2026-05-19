@@ -54,12 +54,17 @@ def _kb(*rows: list[InlineKeyboardButton]) -> InlineKeyboardMarkup:
 # ---------- главные экраны --------------------------------------------------
 
 def main_menu(auto_on: bool = True) -> InlineKeyboardMarkup:
-    bell = "🔔" if auto_on else "🔕"
-    label = f"{bell} Авто-уведомления: {'ВКЛ' if auto_on else 'ВЫКЛ'}"
+    """Главное меню — 2 ряда по 2 кнопки + одна полная.
+
+    Авто-уведомления вынесены в первый ряд как ключевой переключатель
+    (часто ли работает мониторинг — основной вопрос пользователя).
+    """
+    bell_label = "🔔 Авто: ВКЛ" if auto_on else "🔕 Авто: ВЫКЛ"
     return _kb(
-        [_btn("🔍 Поиск лотов", "m:search")],
-        [_btn("⚙️ Мой фильтр", "m:filter")],
-        [_btn(label, "m:auto:t")],
+        [_btn("🔍 Поиск", "m:search"),
+         _btn("⚙️ Фильтр", "m:filter")],
+        [_btn(bell_label, "m:auto:t"),
+         _btn("🔖 Избранное", "m:favs")],
         [_btn("❓ Помощь", "m:help")],
     )
 

@@ -138,21 +138,23 @@ async def send_price_drop(bot: Bot, chat_id: int, item: Listing,
         return False
 
 
-async def send_listing(bot: Bot, chat_id: int, item: Listing) -> bool:
+async def send_listing(bot: Bot, chat_id: int, item: Listing,
+                       *, tag: str | None = None) -> bool:
     """Отправить карточку лота. True = успех, False = ошибка.
 
-    Если юзер заблокировал бота — деактивируем его (не будем долбить
-    каждый scan). Локальный импорт DB — чтобы не плодить циклы.
-
-    Под карточкой — inline-кнопка «🔖 В избранное» (или «❌ Убрать», если
-    лот уже в избранном).
+    tag — опциональная плашка над карточкой, например:
+      "🆕 Новый лот"            — из почасовой рассылки
+      "🔍 По вашему запросу"   — из /search
+      "🔖 Из избранного"        — из /favs
+      "💰 Снижение цены 12%"   — из price-drop (используется в send_price_drop)
     """
     import asyncio
 
     from bot import config
     from bot.storage import init_db
 
-    text = format_listing(item)
+    base_text = format_listing(item)
+    text = f"<b>{tag}</b>\n\n{base_text}" if tag else base_text
     photo = item.main_photo()
     # Текущее состояние избранного для этого юзера — определяет подпись
     db = init_db(config.DB_PATH)

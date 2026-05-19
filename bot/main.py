@@ -13,6 +13,7 @@ from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.interval import IntervalTrigger
 
 from bot import config
+from bot.commands import setup_bot_commands
 from bot.handlers import build_root_router
 from bot.healthcheck import start_healthcheck
 from bot.monitor import run_scan, seed_seen
@@ -84,6 +85,9 @@ async def main() -> None:
 
     # Healthcheck: только если задан HEALTHCHECK_PORT/PORT (например, на Railway).
     health_runner = await start_healthcheck(db, config.HEALTHCHECK_PORT)
+
+    # Команды бота (для меню `/` в Telegram) и кнопка Menu в чате
+    await setup_bot_commands(bot)
 
     log.info("Стартую long-polling")
     try:

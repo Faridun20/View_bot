@@ -158,7 +158,7 @@ async def do_search(bot: Bot, chat_id: int, *, n: int, show_all: bool) -> None:
         if not matches(item, f):
             continue
 
-        ok = await send_listing(bot, chat_id, item)
+        ok = await send_listing(bot, chat_id, item, tag="🔍 По вашему запросу")
         if ok:
             sent += 1
             # Запоминаем — чтобы не присылать повторно ни через /search, ни

@@ -54,23 +54,46 @@ async def cmd_menu(msg: Message, state: FSMContext) -> None:
     db = init_db(config.DB_PATH)
     db.upsert_user(msg.chat.id, msg.from_user.username if msg.from_user else None)
     auto_on = db.is_active(msg.chat.id)
-    await msg.answer(_main_text(auto_on), parse_mode="HTML",
+    text = _main_text(db, msg.chat.id, auto_on)
+    await msg.answer(text, parse_mode="HTML",
                      reply_markup=keyboards.main_menu(auto_on))
 
 
-def _main_text(auto_on: bool) -> str:
-    auto_descr = (
-        f"🔔 <b>Авто-уведомления:</b> ВКЛ — каждые "
-        f"{config.MONITOR_INTERVAL_MINUTES} мин бот проверяет сайт и шлёт новые "
-        f"лоты по фильтру."
-        if auto_on else
-        "🔕 <b>Авто-уведомления:</b> ВЫКЛ — нажмите кнопку ниже, чтобы включить."
-    )
+def _main_text(db, chat_id: int, auto_on: bool) -> str:
+    """Главное меню — статус, сводка фильтра, счётчик избранного."""
+    f = db.get_filter(chat_id)
+    favs_n = db.count_favorites(chat_id)
+
+    # Авто-уведомления
+    if auto_on:
+        auto_line = (
+            f"🔔 <b>Авто-уведомления ВКЛ</b> — каждые "
+            f"{config.MONITOR_INTERVAL_MINUTES} мин"
+        )
+    else:
+        auto_line = "🔕 <b>Авто-уведомления ВЫКЛ</b>"
+
+    # Сводка фильтра одной строкой
+    if f.is_empty():
+        filter_line = "🎯 <b>Фильтр пуст</b> — придут все новые экскаваторы"
+    else:
+        # Считаем сколько параметров реально задано
+        active = [x for x in [
+            f.manufacturers, f.subcategories, f.regions, f.min_grade,
+            f.blacklist_keywords, f.blacklist_sellers,
+            f.year_from, f.year_to,
+            f.price_min_won, f.price_max_won,
+            f.hours_max, f.skip_no_hours, f.require_photo, f.keyword,
+        ] if x]
+        filter_line = f"🎯 <b>Фильтр активен</b> — {len(active)} параметр(а/ов)"
+
+    favs_line = f"🔖 <b>Избранное:</b> {favs_n} лотов" if favs_n else "🔖 <i>Нет избранного</i>"
+
     return (
         "<b>📋 Главное меню</b>\n\n"
-        "🔍 <b>Поиск</b> — прислать N свежих лотов прямо сейчас\n"
-        "⚙️ <b>Фильтр</b> — настроить, что вам интересно\n\n"
-        f"{auto_descr}"
+        f"{auto_line}\n"
+        f"{filter_line}\n"
+        f"{favs_line}"
     )
 
 
@@ -106,8 +129,10 @@ async def cb_noop(cb: CallbackQuery) -> None:
 @router.callback_query(F.data == "m:main")
 async def cb_main(cb: CallbackQuery, state: FSMContext) -> None:
     await state.clear()
-    auto_on = init_db(config.DB_PATH).is_active(cb.message.chat.id)
-    await _edit(cb, _main_text(auto_on), keyboards.main_menu(auto_on))
+    db = init_db(config.DB_PATH)
+    auto_on = db.is_active(cb.message.chat.id)
+    await _edit(cb, _main_text(db, cb.message.chat.id, auto_on),
+                keyboards.main_menu(auto_on))
     await cb.answer()
 
 
@@ -116,12 +141,21 @@ async def cb_main_auto_toggle(cb: CallbackQuery) -> None:
     db = init_db(config.DB_PATH)
     new_active = not db.is_active(cb.message.chat.id)
     db.set_active(cb.message.chat.id, new_active)
-    await _edit(cb, _main_text(new_active), keyboards.main_menu(new_active))
+    await _edit(cb, _main_text(db, cb.message.chat.id, new_active),
+                keyboards.main_menu(new_active))
     await cb.answer(
         "Авто-уведомления включены 🔔" if new_active
         else "Авто-уведомления выключены 🔕",
         show_alert=False,
     )
+
+
+@router.callback_query(F.data == "m:favs")
+async def cb_main_favs(cb: CallbackQuery) -> None:
+    """Кнопка «Избранное» в главном меню — показывает избранные лоты."""
+    await cb.answer("Открываю избранное…")
+    from bot.handlers.favorites import show_favorites
+    await show_favorites(cb.bot, cb.message.chat.id)
 
 
 @router.callback_query(F.data == "m:search")

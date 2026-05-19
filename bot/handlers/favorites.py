@@ -1,12 +1,13 @@
-"""Избранные лоты: inline-callback fav:add/del + команда /favs."""
+"""Избранные лоты: inline-callback fav:add/del + команда /favs + /history."""
 from __future__ import annotations
 
 import asyncio
 import logging
+from datetime import datetime
 
 from aiogram import F, Router
 from aiogram.exceptions import TelegramAPIError
-from aiogram.filters import Command
+from aiogram.filters import Command, CommandObject
 from aiogram.types import (
     CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup, Message,
 )
@@ -73,6 +74,63 @@ async def cb_blacklist_seller(cb: CallbackQuery) -> None:
     )
 
 
+@router.message(Command("history"))
+async def cmd_history(msg: Message, command: CommandObject) -> None:
+    """Показать историю цен лота: /history <pid>"""
+    arg = (command.args or "").strip()
+    if not arg.isdigit():
+        await msg.answer(
+            "Использование: <code>/history 9155895</code>\n\n"
+            "pid лота виден в ссылке «Открыть на сайте» в карточке "
+            "(после <code>?pid=</code>).",
+            parse_mode="HTML",
+        )
+        return
+    pid = int(arg)
+    db = init_db(config.DB_PATH)
+    rows = db.price_history(pid, limit=50)
+    if not rows:
+        await msg.answer(
+            f"📊 По pid <b>{pid}</b> история цен пуста.\n"
+            f"Бот записывает цену при первом появлении лота в каталоге и "
+            f"при каждом изменении.",
+            parse_mode="HTML",
+        )
+        return
+
+    # rows: [(recorded_at_iso, price_won)] DESC
+    lines = [f"📊 <b>История цен лота {pid}</b>\n"]
+    prev_price = None
+    for ts, price in reversed(rows):     # ASC для красивого графика снизу вверх
+        try:
+            dt = datetime.fromisoformat(ts).strftime("%d.%m %H:%M")
+        except ValueError:
+            dt = ts
+        if price is None:
+            lines.append(f"<code>{dt}</code> — цена не указана")
+            continue
+        marker = ""
+        if prev_price is not None and price != prev_price:
+            if price < prev_price:
+                pct = round((prev_price - price) * 100 / prev_price)
+                marker = f"  ↓ {pct}%"
+            else:
+                pct = round((price - prev_price) * 100 / prev_price)
+                marker = f"  ↑ {pct}%"
+        man_won = price // 10_000
+        lines.append(f"<code>{dt}</code> — {man_won:,} 만원{marker}".replace(",", " "))
+        prev_price = price
+
+    # Текущая = последняя
+    if prev_price is not None:
+        lines.append(f"\n<b>Сейчас:</b> {prev_price // 10_000:,} 만원".replace(",", " "))
+
+    lines.append(f'\n🔗 <a href="https://www.4396200.com/sub8_1_vvv.html?pid={pid}">'
+                 f'Открыть лот на сайте</a>')
+    await msg.answer("\n".join(lines), parse_mode="HTML",
+                     disable_web_page_preview=True)
+
+
 @router.message(Command("unblock_sellers"))
 async def cmd_unblock_sellers(msg: Message) -> None:
     """Очистить чёрный список продавцов."""
@@ -91,11 +149,19 @@ async def cmd_unblock_sellers(msg: Message) -> None:
 
 @router.message(Command("favs"))
 async def cmd_favs(msg: Message) -> None:
-    """Прислать всё избранное (свежими карточками)."""
+    await show_favorites(msg.bot, msg.chat.id)
+
+
+async def show_favorites(bot, chat_id: int) -> None:
+    """Прислать все избранные лоты пользователя (актуально с сайта).
+
+    Вынесено из cmd_favs, чтобы вызывать и из callback-кнопок главного меню.
+    """
     db = init_db(config.DB_PATH)
-    pids = db.list_favorites(msg.chat.id, limit=20)
+    pids = db.list_favorites(chat_id, limit=20)
     if not pids:
-        await msg.answer(
+        await bot.send_message(
+            chat_id,
             "У вас нет избранных лотов.\n\n"
             "Под каждой присланной карточкой есть кнопка <b>🔖 В избранное</b> — "
             "тапайте её, чтобы сохранить интересные лоты сюда.",
@@ -103,14 +169,13 @@ async def cmd_favs(msg: Message) -> None:
         )
         return
 
-    await msg.answer(
+    await bot.send_message(
+        chat_id,
         f"🔖 Ваше избранное: <b>{len(pids)}</b> лотов "
         f"(показываю последние {min(len(pids), 20)}).",
         parse_mode="HTML",
     )
 
-    # Парсим карточки актуально с сайта (цены могли поменяться, лот мог
-    # быть снят). Делаем последовательно — Telegram любит 1 msg/sec.
     sent = 0
     not_found = []
     for pid in pids:
@@ -118,19 +183,19 @@ async def cmd_favs(msg: Message) -> None:
         if item is None or not (item.model or item.manufacturer or item.price_raw):
             not_found.append(pid)
             continue
-        ok = await send_listing(msg.bot, msg.chat.id, item)
+        ok = await send_listing(bot, chat_id, item, tag="🔖 Из избранного")
         if ok:
             sent += 1
         await asyncio.sleep(0.3)
 
     if not_found:
-        # Лоты могут быть удалены с сайта или закрыты. Предложим убрать.
         kb = InlineKeyboardMarkup(inline_keyboard=[
             [InlineKeyboardButton(text=f"🗑 Убрать {pid} из избранного",
                                   callback_data=f"fav:del:{pid}")]
             for pid in not_found[:5]
         ])
-        await msg.answer(
+        await bot.send_message(
+            chat_id,
             f"⚠️ Не удалось загрузить {len(not_found)} лотов — возможно, "
             f"они уже сняты с сайта.",
             reply_markup=kb,

@@ -211,7 +211,7 @@ async def run_scan(bot: Bot, db: DB) -> None:
                 continue
             if db.was_sent(chat_id, pid):
                 continue
-            ok = await send_listing(bot, chat_id, item)
+            ok = await send_listing(bot, chat_id, item, tag="🆕 Новый лот")
             if ok:
                 db.mark_sent(chat_id, pid)
                 total_sent += 1
