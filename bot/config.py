@@ -38,9 +38,10 @@ CUPID_STORAGE = DATA_DIR / "storage_state.json"
 # Расписание мониторинга
 MONITOR_INTERVAL_MINUTES = int(_env("MONITOR_INTERVAL_MINUTES", "60") or 60)
 
-# Сколько новых лотов за один прогон макс. отправляем одному юзеру (защита
-# от спама при первом запуске — иначе сразу ливанёт сотни сообщений).
-MAX_NOTIFICATIONS_PER_RUN = int(_env("MAX_NOTIFICATIONS_PER_RUN", "20") or 20)
+# DEPRECATED: раньше был жёсткий лимит на сообщения в одном scan'е, но он
+# приводил к ПОТЕРЕ лотов (они оказывались помечены seen без рассылки).
+# Защита от первичного потопа теперь полностью на SEED_RECENT_LOTS.
+MAX_NOTIFICATIONS_PER_RUN = int(_env("MAX_NOTIFICATIONS_PER_RUN", "0") or 0)  # 0 = не использовать
 
 # Сколько лотов из истории «зачесть как уже виденные» при первом запуске,
 # чтобы не спамить старыми объявлениями.

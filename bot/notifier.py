@@ -9,7 +9,11 @@ import logging
 
 from aiogram import Bot
 from aiogram.enums import ParseMode
-from aiogram.exceptions import TelegramAPIError
+from aiogram.exceptions import (
+    TelegramAPIError,
+    TelegramForbiddenError,
+    TelegramRetryAfter,
+)
 
 from bot.scraper.models import EXCAVATOR_SUBCATEGORIES, Listing
 
@@ -70,14 +74,18 @@ def format_listing(item: Listing) -> str:
 
 
 async def send_listing(bot: Bot, chat_id: int, item: Listing) -> bool:
-    """Отправить карточку лота. True = успех, False = ошибка."""
+    """Отправить карточку лота. True = успех, False = ошибка.
+
+    Если юзер заблокировал бота — деактивируем его (не будем долбить
+    каждый scan). Локальный импорт DB — чтобы не плодить циклы.
+    """
+    import asyncio
+
     text = format_listing(item)
     photo = item.main_photo()
 
-    try:
+    async def _do_send() -> None:
         if photo:
-            # caption у фото ограничен 1024 символами — обрезаем, полный текст
-            # уйдёт отдельным сообщением только если не влез.
             if len(text) <= 1024:
                 await bot.send_photo(
                     chat_id=chat_id, photo=photo, caption=text,
@@ -94,7 +102,33 @@ async def send_listing(bot: Bot, chat_id: int, item: Listing) -> bool:
                 chat_id=chat_id, text=text,
                 parse_mode=ParseMode.HTML, disable_web_page_preview=True,
             )
+
+    try:
+        await _do_send()
         return True
+    except TelegramForbiddenError:
+        # Юзер заблокировал бота / удалил чат — деактивируем, чтобы
+        # почасовой мониторинг его пропускал. /start снова активирует.
+        logger.info("Чат %s заблокировал бота, деактивирую", chat_id)
+        try:
+            from bot import config
+            from bot.storage import init_db
+            init_db(config.DB_PATH).set_active(chat_id, False)
+        except Exception:
+            logger.exception("Не смог деактивировать %s", chat_id)
+        return False
+    except TelegramRetryAfter as e:
+        # Rate limit — подождём столько, сколько просит Telegram, и попробуем
+        # ОДИН раз ещё. Если опять — сдаёмся.
+        wait = max(1, int(e.retry_after) + 1)
+        logger.warning("RetryAfter %ds для чата %s — ждём и пробуем повторно", wait, chat_id)
+        await asyncio.sleep(wait)
+        try:
+            await _do_send()
+            return True
+        except TelegramAPIError as e2:
+            logger.warning("Повтор не помог: чат %s, лот %s: %s", chat_id, item.pid, e2)
+            return False
     except TelegramAPIError as e:
         logger.warning("Не удалось отправить лот %s в чат %s: %s", item.pid, chat_id, e)
         return False

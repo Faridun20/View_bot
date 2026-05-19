@@ -34,6 +34,18 @@ class MenuInput(StatesGroup):
     blacklist = State()
 
 
+@router.message(Command("cancel"))
+async def cmd_cancel(msg: Message, state: FSMContext) -> None:
+    """Выйти из любого активного FSM-состояния."""
+    current = await state.get_state()
+    await state.clear()
+    if current:
+        f = init_db(config.DB_PATH).get_filter(msg.chat.id)
+        await msg.answer("Ввод отменён.", reply_markup=keyboards.filter_menu(f))
+    else:
+        await msg.answer("Нечего отменять — вы не вводите данных.")
+
+
 # ---------- /menu ----------------------------------------------------------
 
 @router.message(Command("menu"))
@@ -552,7 +564,7 @@ async def cb_pick_keyword(cb: CallbackQuery, state: FSMContext) -> None:
 
 # ---------- ввод произвольных значений (после "Своё значение") -------------
 
-@router.message(MenuInput.price)
+@router.message(MenuInput.price, ~F.text.startswith("/"))
 async def msg_input_price(msg: Message, state: FSMContext) -> None:
     digits = "".join(c for c in (msg.text or "") if c.isdigit())
     if not digits:
@@ -567,7 +579,7 @@ async def msg_input_price(msg: Message, state: FSMContext) -> None:
                      reply_markup=keyboards.filter_menu(f))
 
 
-@router.message(MenuInput.price_min)
+@router.message(MenuInput.price_min, ~F.text.startswith("/"))
 async def msg_input_price_min(msg: Message, state: FSMContext) -> None:
     digits = "".join(c for c in (msg.text or "") if c.isdigit())
     if not digits:
@@ -582,7 +594,7 @@ async def msg_input_price_min(msg: Message, state: FSMContext) -> None:
                      reply_markup=keyboards.filter_menu(f))
 
 
-@router.message(MenuInput.blacklist)
+@router.message(MenuInput.blacklist, ~F.text.startswith("/"))
 async def msg_input_blacklist(msg: Message, state: FSMContext) -> None:
     text = (msg.text or "").strip()
     if not text:
@@ -598,7 +610,7 @@ async def msg_input_blacklist(msg: Message, state: FSMContext) -> None:
                      reply_markup=keyboards.filter_menu(f))
 
 
-@router.message(MenuInput.hours)
+@router.message(MenuInput.hours, ~F.text.startswith("/"))
 async def msg_input_hours(msg: Message, state: FSMContext) -> None:
     digits = "".join(c for c in (msg.text or "") if c.isdigit())
     if not digits:
@@ -613,7 +625,7 @@ async def msg_input_hours(msg: Message, state: FSMContext) -> None:
                      reply_markup=keyboards.filter_menu(f))
 
 
-@router.message(MenuInput.keyword)
+@router.message(MenuInput.keyword, ~F.text.startswith("/"))
 async def msg_input_keyword(msg: Message, state: FSMContext) -> None:
     text = (msg.text or "").strip()
     if not text:

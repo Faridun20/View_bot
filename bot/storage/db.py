@@ -128,6 +128,11 @@ class DB:
 
     def _init(self) -> None:
         with self._conn() as c:
+            # WAL: writer не блокирует readers (и наоборот), а конкурентные
+            # writers сериализуются на ~миллисекунды. Без него monitor.run_scan
+            # и /search упирались бы друг в друга при одновременной записи.
+            c.execute("PRAGMA journal_mode=WAL")
+            c.execute("PRAGMA synchronous=NORMAL")   # быстрее, при WAL безопасно
             c.executescript(SCHEMA)
             self._migrate(c)
 

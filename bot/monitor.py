@@ -173,21 +173,25 @@ async def run_scan(bot: Bot, db: DB) -> None:
 
     users = db.active_users()
     user_filters: dict[int, UserFilter] = {u: db.get_filter(u) for u in users}
-    # Счётчик отправок в этом прогоне на пользователя — защита от спама.
-    sent_in_run: dict[int, int] = {u: 0 for u in users}
+    total_sent = 0
 
     for pid, cate in new_pids:
         item = await asyncio.to_thread(_fetch_item, pid)
         if item is None:
+            # Сетевая ошибка/HTTP-сбой — НЕ помечаем seen, попробуем в
+            # следующем скане (это не «лот битый», а наша проблема).
             continue
 
-        # помечаем виденным сразу после успешной загрузки карточки
+        # Canary: если все основные поля пустые — парсер скорее всего
+        # сломан под изменения сайта. Логируем и не шлём пустую карточку.
+        if not (item.model or item.manufacturer or item.price_raw):
+            logger.warning("Пустая карточка pid=%s — парсер мог сломаться", pid)
+            db.mark_seen(pid, cate)
+            continue
+
         db.mark_seen(pid, cate)
 
-        # рассылка тем, у кого фильтр совпал и кому ещё не отправляли
         for chat_id in users:
-            if sent_in_run[chat_id] >= config.MAX_NOTIFICATIONS_PER_RUN:
-                continue
             f = user_filters[chat_id]
             if not matches(item, f):
                 continue
@@ -196,11 +200,11 @@ async def run_scan(bot: Bot, db: DB) -> None:
             ok = await send_listing(bot, chat_id, item)
             if ok:
                 db.mark_sent(chat_id, pid)
-                sent_in_run[chat_id] += 1
+                total_sent += 1
             # Telegram-rate-limit: 30 сообщений/сек глобально, 1/сек на чат.
             await asyncio.sleep(0.05)
 
-    logger.info("Сканирование завершено: отправлено %s", sum(sent_in_run.values()))
+    logger.info("Сканирование завершено: отправлено %d сообщений", total_sent)
 
 
 async def seed_seen(db: DB, *, take: int) -> None:
