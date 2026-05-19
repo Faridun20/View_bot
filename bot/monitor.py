@@ -130,6 +130,10 @@ def matches(item: Listing, f: UserFilter) -> bool:
     if f.hours_max and item.hours is not None and item.hours > f.hours_max:
         return False
 
+    # Фото (по полной карточке)
+    if f.require_photo and not item.photos:
+        return False
+
     # Ключевое слово (positive search)
     if f.keyword:
         kw = f.keyword.strip().lower()

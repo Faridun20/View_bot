@@ -72,6 +72,25 @@ def parse_listing_page(html: str, cate_code: str | None = None) -> list[ListingP
         elif "급" in text and not prev.grade:
             prev.grade = text.strip()
 
+    # Признак «есть фото» — по src главной миниатюры. У лотов без фото
+    # сайт ставит заглушку 'img/sub/s9_i2.png' (или похожую). У лотов с
+    # фото — путь '/upload/thumb_...'.
+    for a in soup.select("a[href*='sub8_1_vvv.html?pid='] img"):
+        href = (a.parent.get("href") if a.parent else "") or ""
+        m = PID_RE.search(href)
+        if not m:
+            continue
+        pid = int(m.group(1))
+        prev = items.setdefault(pid, ListingPreview(pid=pid, cate_code=cate_code))
+        src = (a.get("src") or "").lower()
+        is_real = "/upload/" in src
+        # Если хотя бы раз увидели реальную картинку — считаем что фото есть.
+        # Если все находки — заглушка, ставим False.
+        if prev.has_photo is None:
+            prev.has_photo = is_real
+        elif is_real:
+            prev.has_photo = True
+
     # Сортировка: свежие (большой pid) первыми
     return sorted(items.values(), key=lambda x: x.pid, reverse=True)
 

@@ -67,6 +67,10 @@ def _passes_preview(prev: ListingPreview, f: UserFilter) -> bool:
         if grade_rank(prev.grade) < f.min_grade:
             return False
 
+    # Фото — если знаем, что в превью миниатюра-заглушка, можно сразу отсечь.
+    if f.require_photo and prev.has_photo is False:
+        return False
+
     return True
 
 

@@ -95,6 +95,8 @@ def _describe(f: UserFilter) -> str:
         rows.append(f"⏱ Моточасы ≤ <b>{f.hours_max:,}</b>".replace(",", " "))
     if f.skip_no_hours:
         rows.append("🚫 Лоты без моточасов пропускаются")
+    if f.require_photo:
+        rows.append("📷 Только лоты с фото")
     if f.blacklist_keywords:
         rows.append(f"🚫 Исключить: <b>{', '.join(f.blacklist_keywords)}</b>")
     if f.keyword:

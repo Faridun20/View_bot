@@ -41,16 +41,24 @@ async def cmd_menu(msg: Message, state: FSMContext) -> None:
     await state.clear()
     db = init_db(config.DB_PATH)
     db.upsert_user(msg.chat.id, msg.from_user.username if msg.from_user else None)
-    await msg.answer(_main_text(), parse_mode="HTML",
-                     reply_markup=keyboards.main_menu())
+    auto_on = db.is_active(msg.chat.id)
+    await msg.answer(_main_text(auto_on), parse_mode="HTML",
+                     reply_markup=keyboards.main_menu(auto_on))
 
 
-def _main_text() -> str:
+def _main_text(auto_on: bool) -> str:
+    auto_descr = (
+        f"🔔 <b>Авто-уведомления:</b> ВКЛ — каждые "
+        f"{config.MONITOR_INTERVAL_MINUTES} мин бот проверяет сайт и шлёт новые "
+        f"лоты по фильтру."
+        if auto_on else
+        "🔕 <b>Авто-уведомления:</b> ВЫКЛ — нажмите кнопку ниже, чтобы включить."
+    )
     return (
         "<b>📋 Главное меню</b>\n\n"
         "🔍 <b>Поиск</b> — прислать N свежих лотов прямо сейчас\n"
-        "⚙️ <b>Фильтр</b> — настроить, что вам интересно\n"
-        "❓ <b>Помощь</b> — список всех команд"
+        "⚙️ <b>Фильтр</b> — настроить, что вам интересно\n\n"
+        f"{auto_descr}"
     )
 
 
@@ -69,6 +77,7 @@ def _filter_text(f: UserFilter) -> str:
             + ("  🚫 без часов" if f.skip_no_hours else ""),
             f"🔍 {keyboards._short_keyword(f)}",
             f"🚫 {keyboards._short_blacklist(f)}",
+            ("📷 Только с фото" if f.require_photo else "🖼 Любые (с/без фото)"),
         ]
         body = "\n".join(rows)
     return f"<b>⚙️ Ваш фильтр</b>\n\n{body}\n\nТапните по строке, чтобы изменить:"
@@ -85,8 +94,22 @@ async def cb_noop(cb: CallbackQuery) -> None:
 @router.callback_query(F.data == "m:main")
 async def cb_main(cb: CallbackQuery, state: FSMContext) -> None:
     await state.clear()
-    await _edit(cb, _main_text(), keyboards.main_menu())
+    auto_on = init_db(config.DB_PATH).is_active(cb.message.chat.id)
+    await _edit(cb, _main_text(auto_on), keyboards.main_menu(auto_on))
     await cb.answer()
+
+
+@router.callback_query(F.data == "m:auto:t")
+async def cb_main_auto_toggle(cb: CallbackQuery) -> None:
+    db = init_db(config.DB_PATH)
+    new_active = not db.is_active(cb.message.chat.id)
+    db.set_active(cb.message.chat.id, new_active)
+    await _edit(cb, _main_text(new_active), keyboards.main_menu(new_active))
+    await cb.answer(
+        "Авто-уведомления включены 🔔" if new_active
+        else "Авто-уведомления выключены 🔕",
+        show_alert=False,
+    )
 
 
 @router.callback_query(F.data == "m:search")
@@ -389,6 +412,19 @@ async def cb_toggle_no_hours(cb: CallbackQuery) -> None:
     await cb.answer(
         "Лоты без часов будут пропускаться" if f.skip_no_hours
         else "Лоты без часов будут приходить"
+    )
+
+
+@router.callback_query(F.data == "fph:t")
+async def cb_toggle_require_photo(cb: CallbackQuery) -> None:
+    db = init_db(config.DB_PATH)
+    f = db.get_filter(cb.message.chat.id)
+    f.require_photo = not f.require_photo
+    db.set_filter(f)
+    await _edit(cb, _filter_text(f), keyboards.filter_menu(f))
+    await cb.answer(
+        "Только лоты с фото 📷" if f.require_photo
+        else "Любые лоты (с/без фото) 🖼"
     )
 
 

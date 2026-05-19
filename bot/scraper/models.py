@@ -168,6 +168,7 @@ class ListingPreview:
     price_raw: str | None = None    # «13,800만원»
     grade: str | None = None        # «A+급»
     cate_code: str | None = None    # подкатегория, в которой найден лот
+    has_photo: bool | None = None   # True/False если знаем; None если не определили
 
 
 @dataclass

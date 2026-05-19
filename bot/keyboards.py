@@ -53,10 +53,13 @@ def _kb(*rows: list[InlineKeyboardButton]) -> InlineKeyboardMarkup:
 
 # ---------- главные экраны --------------------------------------------------
 
-def main_menu() -> InlineKeyboardMarkup:
+def main_menu(auto_on: bool = True) -> InlineKeyboardMarkup:
+    bell = "🔔" if auto_on else "🔕"
+    label = f"{bell} Авто-уведомления: {'ВКЛ' if auto_on else 'ВЫКЛ'}"
     return _kb(
         [_btn("🔍 Поиск лотов", "m:search")],
         [_btn("⚙️ Мой фильтр", "m:filter")],
+        [_btn(label, "m:auto:t")],
         [_btn("❓ Помощь", "m:help")],
     )
 
@@ -74,7 +77,8 @@ def search_menu() -> InlineKeyboardMarkup:
 
 def filter_menu(f: UserFilter) -> InlineKeyboardMarkup:
     """Главный экран фильтра — короткие пиктограммы текущего значения."""
-    no_hours_label = "🚫 без часов" if f.skip_no_hours else "✅ показывать без часов"
+    no_hours_label = "🚫 без часов" if f.skip_no_hours else "✅ без часов"
+    photo_label = "📷 только с фото" if f.require_photo else "🖼 любые (с/без фото)"
     return _kb(
         [_btn(f"📏 {_short_subs(f)}", "f:edit:s")],
         [_btn(f"🏭 {_short_mfr(f)}", "f:edit:m"),
@@ -85,7 +89,8 @@ def filter_menu(f: UserFilter) -> InlineKeyboardMarkup:
          _btn(f"⏱ {_short_hours(f)}", "f:edit:h")],
         [_btn(f"🔍 {_short_keyword(f)}", "f:edit:k"),
          _btn(f"🚫 {_short_blacklist(f)}", "f:edit:b")],
-        [_btn(no_hours_label, "fnoh:t")],
+        [_btn(no_hours_label, "fnoh:t"),
+         _btn(photo_label, "fph:t")],
         [_btn("♻️ Сбросить весь фильтр", "f:reset")],
         [_btn("← Назад", "m:main")],
     )

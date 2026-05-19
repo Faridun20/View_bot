@@ -59,6 +59,7 @@ CREATE TABLE IF NOT EXISTS filters (
   price_max_won      INTEGER,
   hours_max          INTEGER,
   skip_no_hours      INTEGER NOT NULL DEFAULT 0,   -- 1 = не присылать лоты без часов
+  require_photo      INTEGER NOT NULL DEFAULT 0,   -- 1 = только лоты с фото
   keyword            TEXT,        -- substring в model + description + manufacturer
   updated_at         TEXT NOT NULL
 );
@@ -100,6 +101,7 @@ class UserFilter:
     price_max_won: int | None = None
     hours_max: int | None = None
     skip_no_hours: bool = False
+    require_photo: bool = False
     keyword: str | None = None
 
     def is_empty(self) -> bool:
@@ -108,7 +110,8 @@ class UserFilter:
             self.min_grade, self.blacklist_keywords,
             self.year_from, self.year_to,
             self.price_min_won, self.price_max_won,
-            self.hours_max, self.skip_no_hours, self.keyword,
+            self.hours_max, self.skip_no_hours, self.require_photo,
+            self.keyword,
         ])
 
 
@@ -142,6 +145,7 @@ class DB:
             ("blacklist_keywords", "TEXT"),
             ("price_min_won",      "INTEGER"),
             ("skip_no_hours",      "INTEGER NOT NULL DEFAULT 0"),
+            ("require_photo",      "INTEGER NOT NULL DEFAULT 0"),
         ]
         for name, decl in adders:
             if name not in cols:
@@ -183,6 +187,17 @@ class DB:
         with self._conn() as c:
             return [r["chat_id"] for r in c.execute("SELECT chat_id FROM users WHERE active = 1")]
 
+    def is_active(self, chat_id: int) -> bool:
+        with self._conn() as c:
+            r = c.execute("SELECT active FROM users WHERE chat_id = ?", (chat_id,)).fetchone()
+        return bool(r and r["active"])
+
+    def set_active(self, chat_id: int, active: bool) -> None:
+        """Включить/выключить почасовые автоуведомления, не удаляя пользователя."""
+        with self._conn() as c:
+            c.execute("UPDATE users SET active = ? WHERE chat_id = ?",
+                      (1 if active else 0, chat_id))
+
     # ---- filters ---------------------------------------------------------
 
     def get_filter(self, chat_id: int) -> UserFilter:
@@ -214,6 +229,7 @@ class DB:
             price_max_won=r["price_max_won"],
             hours_max=r["hours_max"],
             skip_no_hours=bool(col("skip_no_hours", 0)),
+            require_photo=bool(col("require_photo", 0)),
             keyword=r["keyword"],
         )
 
@@ -225,8 +241,8 @@ class DB:
                     chat_id, manufacturer, manufacturers, subcategories,
                     regions, min_grade, blacklist_keywords,
                     year_from, year_to, price_min_won, price_max_won,
-                    hours_max, skip_no_hours, keyword, updated_at
-                ) VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    hours_max, skip_no_hours, require_photo, keyword, updated_at
+                ) VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(chat_id) DO UPDATE SET
                   manufacturer       = excluded.manufacturer,
                   manufacturers      = excluded.manufacturers,
@@ -240,6 +256,7 @@ class DB:
                   price_max_won      = excluded.price_max_won,
                   hours_max          = excluded.hours_max,
                   skip_no_hours      = excluded.skip_no_hours,
+                  require_photo      = excluded.require_photo,
                   keyword            = excluded.keyword,
                   updated_at         = excluded.updated_at
                 """,
@@ -255,6 +272,7 @@ class DB:
                     f.year_from, f.year_to,
                     f.price_min_won, f.price_max_won,
                     f.hours_max, int(bool(f.skip_no_hours)),
+                    int(bool(f.require_photo)),
                     f.keyword,
                     _now_iso(),
                 ),
