@@ -49,15 +49,49 @@ HELP_TEXT = (
 
 @router.message(Command("start"))
 async def cmd_start(msg: Message) -> None:
+    from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
+
     from bot import keyboards  # локальный импорт, чтобы не плодить циклы
     db = init_db(config.DB_PATH)
-    db.upsert_user(msg.chat.id, msg.from_user.username if msg.from_user else None)
-    await msg.answer(
-        "✅ Подписка активна.\n\n"
-        "Откройте меню кнопкой ниже или командой /menu.\n"
-        "Все команды — в /help.",
-        reply_markup=keyboards.main_menu(),
+    is_new = db.upsert_user(
+        msg.chat.id,
+        msg.from_user.username if msg.from_user else None,
     )
+
+    if is_new:
+        # Полное onboarding-сообщение для новичков
+        first_name = msg.from_user.first_name if msg.from_user else "коллега"
+        text = (
+            f"👋 Здравствуйте, {esc_html(first_name)}!\n\n"
+            f"Я слежу за новыми объявлениями экскаваторов на сайте "
+            f"<b>4396200.com (그린중기)</b> — крупном корейском маркетплейсе "
+            f"подержанной спецтехники.\n\n"
+            f"<b>Как пользоваться:</b>\n"
+            f"  1️⃣  Настройте фильтр — что вас интересует (производитель, "
+            f"год, цена, регион…)\n"
+            f"  2️⃣  Каждые {config.MONITOR_INTERVAL_MINUTES} мин я буду присылать "
+            f"новые лоты, подходящие под фильтр\n"
+            f"  3️⃣  Сразу посмотреть «что есть сейчас» — кнопка «🔍 Поиск»\n\n"
+            f"Готовы начать?"
+        )
+        kb = InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="⚙️ Шаг 1: Настроить фильтр", callback_data="m:filter")],
+            [InlineKeyboardButton(text="🔍 Или сразу поиск (5 лотов)", callback_data="s:5")],
+            [InlineKeyboardButton(text="❓ Все команды", callback_data="m:help")],
+        ])
+        await msg.answer(text, parse_mode="HTML", reply_markup=kb)
+    else:
+        # Возвращающийся подписчик — сразу главное меню
+        auto_on = db.is_active(msg.chat.id)
+        await msg.answer(
+            "✅ Подписка возобновлена.",
+            reply_markup=keyboards.main_menu(auto_on),
+        )
+
+
+def esc_html(s: str | None) -> str:
+    import html
+    return html.escape(s or "")
 
 
 @router.message(Command("stop"))

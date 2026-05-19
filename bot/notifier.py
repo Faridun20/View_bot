@@ -24,12 +24,15 @@ logger = logging.getLogger(__name__)
 def _listing_kb(pid: int, *, is_fav: bool, seller: str | None) -> InlineKeyboardMarkup:
     """Inline-кнопки под карточкой лота.
 
-    Строка 1: «🔖 В избранное» / «❌ Убрать из избранного»
+    Строка 1: «🔖 В избранное» / «❌ Убрать»  +  «📊 История»
     Строка 2 (опционально): «🚫 Скрывать <продавец>» — если известен seller
     """
     fav_label = "❌ Убрать из избранного" if is_fav else "🔖 В избранное"
     fav_cb = f"fav:del:{pid}" if is_fav else f"fav:add:{pid}"
-    rows = [[InlineKeyboardButton(text=fav_label, callback_data=fav_cb)]]
+    rows = [[
+        InlineKeyboardButton(text=fav_label, callback_data=fav_cb),
+        InlineKeyboardButton(text="📊 История", callback_data=f"hist:{pid}"),
+    ]]
     if seller:
         # Telegram callback_data <=64 байт. seller в карточке — короткое имя
         # (대전어태치먼트 и т.п.), но всё равно подстрахуемся: храним только

@@ -17,7 +17,8 @@ def test_wal_mode(isolated_db):
 
 def test_users_active_lifecycle(isolated_db):
     db = isolated_db
-    db.upsert_user(42, "alice")
+    is_new = db.upsert_user(42, "alice")
+    assert is_new is True                # первый раз — новый
     assert db.is_active(42)
     assert 42 in db.active_users()
     db.set_active(42, False)
@@ -25,8 +26,9 @@ def test_users_active_lifecycle(isolated_db):
     assert 42 not in db.active_users()
     db.set_active(42, True)
     assert db.is_active(42)
-    # upsert повторно — не дублирует
-    db.upsert_user(42, "alice2")
+    # upsert повторно — НЕ новый
+    again = db.upsert_user(42, "alice2")
+    assert again is False
     assert len(db.active_users()) == 1
 
 
@@ -127,6 +129,24 @@ def test_favorites_crud(isolated_db):
     assert db.remove_favorite(1, 200)
     assert not db.remove_favorite(1, 200)
     assert db.count_favorites(1) == 2
+
+
+def test_favorites_with_model_and_pagination(isolated_db):
+    db = isolated_db
+    db.upsert_user(1, "u")
+    db.add_favorite(1, 100, model="EC480")
+    db.add_favorite(1, 200, model="DX380LC5")
+    db.add_favorite(1, 300, model=None)            # без модели
+
+    page = db.list_favorites_with_model(1, limit=2, offset=0)
+    assert len(page) == 2
+    # Свежие первыми
+    assert page[0][0] == 300 and page[0][1] is None
+    assert page[1][0] == 200 and page[1][1] == "DX380LC5"
+
+    page2 = db.list_favorites_with_model(1, limit=2, offset=2)
+    assert len(page2) == 1
+    assert page2[0] == (100, "EC480")
 
 
 def test_auto_admin_first_user(isolated_db):

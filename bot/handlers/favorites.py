@@ -25,8 +25,16 @@ router = Router(name="favorites")
 async def cb_fav_add(cb: CallbackQuery) -> None:
     pid = int(cb.data.split(":")[2])
     db = init_db(config.DB_PATH)
-    added = db.add_favorite(cb.message.chat.id, pid)
-    # Обновим клавиатуру под сообщением, чтобы кнопка превратилась в «Убрать»
+    # Попробуем достать модель из карточки, чтобы потом /favs показывал
+    # компактный список вместо одних pid'ов. Если карточку не достали — не страшно.
+    model: str | None = None
+    try:
+        item = await asyncio.to_thread(_fetch_item, pid)
+        if item:
+            model = item.model
+    except Exception:
+        pass
+    added = db.add_favorite(cb.message.chat.id, pid, model=model)
     try:
         await cb.message.edit_reply_markup(reply_markup=_favorite_kb(pid, True))
     except TelegramAPIError:
@@ -81,19 +89,34 @@ async def cmd_history(msg: Message, command: CommandObject) -> None:
     if not arg.isdigit():
         await msg.answer(
             "Использование: <code>/history 9155895</code>\n\n"
-            "pid лота виден в ссылке «Открыть на сайте» в карточке "
-            "(после <code>?pid=</code>).",
+            "pid лота виден в ссылке «Открыть на сайте» в карточке. "
+            "Удобнее — нажать кнопку <b>📊 История</b> прямо под "
+            "карточкой лота.",
             parse_mode="HTML",
         )
         return
-    pid = int(arg)
+    await _send_history(msg.bot, msg.chat.id, int(arg))
+
+
+@router.callback_query(F.data.startswith("hist:"))
+async def cb_history(cb: CallbackQuery) -> None:
+    """Кнопка «📊 История» под карточкой лота."""
+    pid = int(cb.data.split(":")[1])
+    await cb.answer("Открываю историю…")
+    await _send_history(cb.bot, cb.message.chat.id, pid)
+
+
+async def _send_history(bot, chat_id: int, pid: int) -> None:
+    """Формирует и шлёт текст истории цен. Используется и /history, и
+    кнопкой hist:<pid>."""
     db = init_db(config.DB_PATH)
     rows = db.price_history(pid, limit=50)
     if not rows:
-        await msg.answer(
+        await bot.send_message(
+            chat_id,
             f"📊 По pid <b>{pid}</b> история цен пуста.\n"
             f"Бот записывает цену при первом появлении лота в каталоге и "
-            f"при каждом изменении.",
+            f"при каждом изменении — она появится после следующего scan'а.",
             parse_mode="HTML",
         )
         return
@@ -127,8 +150,8 @@ async def cmd_history(msg: Message, command: CommandObject) -> None:
 
     lines.append(f'\n🔗 <a href="https://www.4396200.com/sub8_1_vvv.html?pid={pid}">'
                  f'Открыть лот на сайте</a>')
-    await msg.answer("\n".join(lines), parse_mode="HTML",
-                     disable_web_page_preview=True)
+    await bot.send_message(chat_id, "\n".join(lines), parse_mode="HTML",
+                           disable_web_page_preview=True)
 
 
 @router.message(Command("unblock_sellers"))
@@ -147,19 +170,21 @@ async def cmd_unblock_sellers(msg: Message) -> None:
     )
 
 
+FAVS_PER_PAGE = 10
+
+
 @router.message(Command("favs"))
 async def cmd_favs(msg: Message) -> None:
-    await show_favorites(msg.bot, msg.chat.id)
+    await show_favorites(msg.bot, msg.chat.id, offset=0)
 
 
-async def show_favorites(bot, chat_id: int) -> None:
-    """Прислать все избранные лоты пользователя (актуально с сайта).
-
-    Вынесено из cmd_favs, чтобы вызывать и из callback-кнопок главного меню.
+async def show_favorites(bot, chat_id: int, *, offset: int = 0) -> None:
+    """Список избранных — одно сообщение с кликабельными кнопками
+    «Открыть <модель>». Pagination по FAVS_PER_PAGE.
     """
     db = init_db(config.DB_PATH)
-    pids = db.list_favorites(chat_id, limit=20)
-    if not pids:
+    total = db.count_favorites(chat_id)
+    if total == 0:
         await bot.send_message(
             chat_id,
             "У вас нет избранных лотов.\n\n"
@@ -169,34 +194,68 @@ async def show_favorites(bot, chat_id: int) -> None:
         )
         return
 
+    items = db.list_favorites_with_model(chat_id, limit=FAVS_PER_PAGE, offset=offset)
+
+    # Список текстом + кнопки-«открыть» под каждой строкой
+    rows: list[list[InlineKeyboardButton]] = []
+    text_lines = [f"🔖 <b>Избранное:</b> {total} лотов"]
+    if total > FAVS_PER_PAGE:
+        first_idx = offset + 1
+        last_idx = offset + len(items)
+        text_lines.append(f"<i>Показано {first_idx}–{last_idx}</i>")
+    text_lines.append("")
+    for pid, model in items:
+        label = (model or f"лот {pid}")[:30]
+        text_lines.append(f"• {label} <code>(pid {pid})</code>")
+        rows.append([
+            InlineKeyboardButton(text=f"📋 {label[:18]}", callback_data=f"fav:open:{pid}"),
+            InlineKeyboardButton(text="📊", callback_data=f"hist:{pid}"),
+            InlineKeyboardButton(text="🗑", callback_data=f"fav:del:{pid}"),
+        ])
+
+    # Pagination кнопки
+    nav: list[InlineKeyboardButton] = []
+    if offset > 0:
+        prev_off = max(0, offset - FAVS_PER_PAGE)
+        nav.append(InlineKeyboardButton(text="← Назад",
+                                        callback_data=f"fav:page:{prev_off}"))
+    if offset + FAVS_PER_PAGE < total:
+        next_off = offset + FAVS_PER_PAGE
+        nav.append(InlineKeyboardButton(text="Вперёд →",
+                                        callback_data=f"fav:page:{next_off}"))
+    if nav:
+        rows.append(nav)
+
     await bot.send_message(
         chat_id,
-        f"🔖 Ваше избранное: <b>{len(pids)}</b> лотов "
-        f"(показываю последние {min(len(pids), 20)}).",
+        "\n".join(text_lines),
         parse_mode="HTML",
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=rows),
+        disable_web_page_preview=True,
     )
 
-    sent = 0
-    not_found = []
-    for pid in pids:
-        item = await asyncio.to_thread(_fetch_item, pid)
-        if item is None or not (item.model or item.manufacturer or item.price_raw):
-            not_found.append(pid)
-            continue
-        ok = await send_listing(bot, chat_id, item, tag="🔖 Из избранного")
-        if ok:
-            sent += 1
-        await asyncio.sleep(0.3)
 
-    if not_found:
-        kb = InlineKeyboardMarkup(inline_keyboard=[
-            [InlineKeyboardButton(text=f"🗑 Убрать {pid} из избранного",
-                                  callback_data=f"fav:del:{pid}")]
-            for pid in not_found[:5]
-        ])
-        await bot.send_message(
-            chat_id,
-            f"⚠️ Не удалось загрузить {len(not_found)} лотов — возможно, "
-            f"они уже сняты с сайта.",
-            reply_markup=kb,
+@router.callback_query(F.data.startswith("fav:page:"))
+async def cb_favs_page(cb: CallbackQuery) -> None:
+    offset = int(cb.data.split(":")[2])
+    await cb.answer()
+    await show_favorites(cb.bot, cb.message.chat.id, offset=offset)
+
+
+@router.callback_query(F.data.startswith("fav:open:"))
+async def cb_favs_open(cb: CallbackQuery) -> None:
+    """Открыть карточку конкретного лота из списка избранного."""
+    pid = int(cb.data.split(":")[2])
+    await cb.answer("Открываю карточку…")
+    item = await asyncio.to_thread(_fetch_item, pid)
+    if item is None or not (item.model or item.manufacturer or item.price_raw):
+        await cb.message.answer(
+            f"⚠️ Не удалось загрузить лот {pid} — возможно, он снят с сайта.\n\n"
+            f"Убрать из избранного:",
+            reply_markup=InlineKeyboardMarkup(inline_keyboard=[[
+                InlineKeyboardButton(text=f"🗑 Убрать {pid}",
+                                     callback_data=f"fav:del:{pid}")
+            ]]),
         )
+        return
+    await send_listing(cb.bot, cb.message.chat.id, item, tag="🔖 Из избранного")

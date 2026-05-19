@@ -79,10 +79,11 @@ CREATE TABLE IF NOT EXISTS sent (
 );
 
 CREATE TABLE IF NOT EXISTS favorites (
-  chat_id    INTEGER NOT NULL,
-  pid        INTEGER NOT NULL,
-  added_at   TEXT NOT NULL,
-  note       TEXT,
+  chat_id        INTEGER NOT NULL,
+  pid            INTEGER NOT NULL,
+  added_at       TEXT NOT NULL,
+  note           TEXT,
+  model_snapshot TEXT,         -- модель в момент добавления — для compact-списка
   PRIMARY KEY (chat_id, pid)
 );
 
@@ -181,6 +182,11 @@ class DB:
         if "is_admin" not in user_cols:
             c.execute("ALTER TABLE users ADD COLUMN is_admin INTEGER NOT NULL DEFAULT 0")
 
+        # model_snapshot для favorites (компактный /favs со списком)
+        fav_cols = {r["name"] for r in c.execute("PRAGMA table_info(favorites)")}
+        if "model_snapshot" not in fav_cols:
+            c.execute("ALTER TABLE favorites ADD COLUMN model_snapshot TEXT")
+
         # Перенос старого скалярного manufacturer в JSON manufacturers
         if "manufacturer" in cols:
             for r in c.execute(
@@ -196,11 +202,18 @@ class DB:
 
     # ---- users -----------------------------------------------------------
 
-    def upsert_user(self, chat_id: int, username: str | None) -> None:
-        """Создаёт/реактивирует пользователя. Если в БД ещё никого нет —
-        этот юзер автоматически становится админом (удобно для тех, кто
-        не хочет настраивать ADMIN_IDS в Railway вручную)."""
+    def upsert_user(self, chat_id: int, username: str | None) -> bool:
+        """Создаёт/реактивирует пользователя.
+
+        Возвращает True если это НОВЫЙ пользователь (раньше не было в БД).
+        Если в БД ещё никого нет — этот юзер автоматически становится
+        админом (удобно для тех, кто не хочет настраивать ADMIN_IDS в
+        Railway вручную).
+        """
         with self._conn() as c:
+            existed = c.execute(
+                "SELECT 1 FROM users WHERE chat_id = ?", (chat_id,)
+            ).fetchone() is not None
             is_first = c.execute("SELECT COUNT(*) FROM users").fetchone()[0] == 0
             c.execute(
                 """
@@ -212,6 +225,7 @@ class DB:
                 """,
                 (chat_id, username, 1 if is_first else 0, _now_iso()),
             )
+            return not existed
 
     def is_admin(self, chat_id: int) -> bool:
         with self._conn() as c:
@@ -406,13 +420,14 @@ class DB:
 
     # ---- favorites -----------------------------------------------------
 
-    def add_favorite(self, chat_id: int, pid: int, note: str | None = None) -> bool:
+    def add_favorite(self, chat_id: int, pid: int,
+                     *, note: str | None = None, model: str | None = None) -> bool:
         """True если добавили (раньше не было), False если уже было."""
         with self._conn() as c:
             cur = c.execute(
-                """INSERT INTO favorites(chat_id, pid, added_at, note)
-                   VALUES(?, ?, ?, ?) ON CONFLICT DO NOTHING""",
-                (chat_id, pid, _now_iso(), note),
+                """INSERT INTO favorites(chat_id, pid, added_at, note, model_snapshot)
+                   VALUES(?, ?, ?, ?, ?) ON CONFLICT DO NOTHING""",
+                (chat_id, pid, _now_iso(), note, model),
             )
             return cur.rowcount > 0
 
@@ -428,17 +443,29 @@ class DB:
                           (chat_id, pid)).fetchone()
         return r is not None
 
-    def list_favorites(self, chat_id: int, limit: int = 50) -> list[int]:
+    def list_favorites(self, chat_id: int, limit: int = 50,
+                       offset: int = 0) -> list[int]:
         # tie-break по pid DESC: при равном added_at (timespec=seconds) лоты,
         # добавленные в одну секунду, всё равно идут в детерминированном
         # порядке (новые pid обычно появились позже).
         with self._conn() as c:
             rows = c.execute(
                 "SELECT pid FROM favorites WHERE chat_id = ? "
-                "ORDER BY added_at DESC, pid DESC LIMIT ?",
-                (chat_id, limit),
+                "ORDER BY added_at DESC, pid DESC LIMIT ? OFFSET ?",
+                (chat_id, limit, offset),
             ).fetchall()
         return [r["pid"] for r in rows]
+
+    def list_favorites_with_model(self, chat_id: int, *, limit: int = 10,
+                                  offset: int = 0) -> list[tuple[int, str | None]]:
+        """Pagination-вариант для компактного /favs со списком."""
+        with self._conn() as c:
+            rows = c.execute(
+                "SELECT pid, model_snapshot FROM favorites WHERE chat_id = ? "
+                "ORDER BY added_at DESC, pid DESC LIMIT ? OFFSET ?",
+                (chat_id, limit, offset),
+            ).fetchall()
+        return [(r["pid"], r["model_snapshot"]) for r in rows]
 
     def count_favorites(self, chat_id: int) -> int:
         with self._conn() as c:
