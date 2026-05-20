@@ -127,6 +127,10 @@ async def do_search(bot: Bot, chat_id: int, *, n: int, show_all: bool) -> None:
     # 2. Идём по свежим pid сверху (preview уже отсортированы)
     budget = max(MIN_BUDGET, n * SCANNED_BUDGET_PER_RESULT)
 
+    # Предзагружаем «уже отправленные» одним запросом — вместо was_sent()
+    # на каждое превью (до budget итераций = до сотен открытий соединения).
+    already_sent = set() if show_all else db.sent_pids_for(chat_id)
+
     sent = 0
     scanned = 0           # сколько превью-карточек просмотрено
     fetched = 0           # сколько полных карточек скачано
@@ -139,7 +143,7 @@ async def do_search(bot: Bot, chat_id: int, *, n: int, show_all: bool) -> None:
         scanned += 1
 
         # Сразу скипаем то, что уже присылали — карточку даже не качаем.
-        if not show_all and db.was_sent(chat_id, prev.pid):
+        if prev.pid in already_sent:
             skipped_seen += 1
             continue
 

@@ -17,6 +17,13 @@ def _now_iso() -> str:
     return datetime.now(timezone.utc).isoformat(timespec="seconds")
 
 
+def _chunks(seq: list, size: int):
+    """Режет список на куски — для безопасного `WHERE pid IN (...)` под
+    лимит переменных SQLite (SQLITE_MAX_VARIABLE_NUMBER, по умолчанию 999)."""
+    for i in range(0, len(seq), size):
+        yield seq[i:i + size]
+
+
 def _dumps(value) -> str | None:
     """JSON-сериализация для list/str с обрезкой пустых значений."""
     if value is None:
@@ -382,6 +389,26 @@ class DB:
         with self._conn() as c:
             return c.execute("SELECT 1 FROM seen_pids WHERE pid = ?", (pid,)).fetchone() is not None
 
+    def seen_pids_among(self, pids: Iterable[int]) -> set[int]:
+        """Какие из переданных pid уже виденные — ОДНИМ запросом.
+
+        Заменяет цикл из сотен `is_seen()` (а с ним — сотни открытий
+        соединения) в run_scan на один батч `WHERE pid IN (...)`.
+        """
+        unique = list({int(p) for p in pids})
+        if not unique:
+            return set()
+        found: set[int] = set()
+        with self._conn() as c:
+            for chunk in _chunks(unique, 900):
+                placeholders = ",".join("?" * len(chunk))
+                rows = c.execute(
+                    f"SELECT pid FROM seen_pids WHERE pid IN ({placeholders})",
+                    chunk,
+                )
+                found.update(r[0] for r in rows)
+        return found
+
     def seen_count(self) -> int:
         with self._conn() as c:
             return c.execute("SELECT COUNT(*) FROM seen_pids").fetchone()[0]
@@ -402,6 +429,17 @@ class DB:
             return c.execute(
                 "SELECT 1 FROM sent WHERE chat_id = ? AND pid = ?", (chat_id, pid)
             ).fetchone() is not None
+
+    def sent_pids_for(self, chat_id: int) -> set[int]:
+        """Все pid, уже отправленные этому чату — ОДНИМ запросом.
+
+        Используется в /search и run_scan, чтобы не звать `was_sent()` в
+        цикле (по превью / по новым лотам), открывая соединение каждый раз.
+        """
+        with self._conn() as c:
+            return {r[0] for r in c.execute(
+                "SELECT pid FROM sent WHERE chat_id = ?", (chat_id,)
+            )}
 
     def clear_sent(self, chat_id: int) -> int:
         """Удалить историю отправленных лотов для одного пользователя.

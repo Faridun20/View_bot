@@ -139,20 +139,29 @@ async def run_scan(bot: Bot, db: DB) -> None:
         logger.warning("Ничего не найдено — возможно, сайт недоступен")
         return
 
-    # Берём только pid, которых нет в seen_pids
-    new_pids: list[tuple[int, str]] = []
-    for pid, cate in sorted(found.items(), reverse=True):  # сначала свежие
-        if not db.is_seen(pid):
-            new_pids.append((pid, cate))
+    # Берём только pid, которых нет в seen_pids — одним батч-запросом
+    # вместо сотен is_seen() (каждый из которых открывал бы соединение).
+    seen = db.seen_pids_among(found.keys())
+    new_pids: list[tuple[int, str]] = [
+        (pid, cate) for pid, cate in sorted(found.items(), reverse=True)
+        if pid not in seen
+    ]
 
     if not new_pids:
         logger.info("Новых лотов нет")
+        # Даже без новых лотов проверяем снижение цен на уже виденных.
+        price_alerts = await _check_price_drops(bot, db, found, seen)
+        logger.info("Сканирование завершено: новых 0, уведомлений о цене %d",
+                    price_alerts)
         return
 
     logger.info("Новых лотов: %d", len(new_pids))
 
     users = db.active_users()
     user_filters: dict[int, UserFilter] = {u: db.get_filter(u) for u in users}
+    # Предзагружаем «уже отправленные» множества по каждому юзеру — чтобы
+    # не звать was_sent() в двойном цикле (new_pids × users).
+    user_sent: dict[int, set[int]] = {u: db.sent_pids_for(u) for u in users}
     total_sent = 0
 
     for pid, cate in new_pids:
@@ -178,11 +187,12 @@ async def run_scan(bot: Bot, db: DB) -> None:
             f = user_filters[chat_id]
             if not matches(item, f):
                 continue
-            if db.was_sent(chat_id, pid):
+            if pid in user_sent[chat_id]:
                 continue
             ok = await send_listing(bot, chat_id, item, tag="🆕 Новый лот")
             if ok:
                 db.mark_sent(chat_id, pid)
+                user_sent[chat_id].add(pid)
                 total_sent += 1
             # Telegram-rate-limit: 30 сообщений/сек глобально, 1/сек на чат.
             await asyncio.sleep(0.05)
@@ -191,18 +201,24 @@ async def run_scan(bot: Bot, db: DB) -> None:
     # Парсим карточки топ-N свежих pid, которые сейчас на сайте и которые
     # бот раньше уже обрабатывал. Если цена ↓ — уведомляем всех, кому лот
     # ранее отсылали ИЛИ у кого он в избранном.
-    price_alerts = await _check_price_drops(bot, db, found)
+    price_alerts = await _check_price_drops(bot, db, found, seen)
     logger.info("Сканирование завершено: новых %d, уведомлений о цене %d",
                 total_sent, price_alerts)
 
 
-async def _check_price_drops(bot: Bot, db: DB, found: dict[int, str]) -> int:
+async def _check_price_drops(bot: Bot, db: DB, found: dict[int, str],
+                             seen: set[int]) -> int:
     """Перепроверяет топ-N свежих лотов из found, которые уже в seen_pids.
+
+    `seen` — множество уже виденных pid (посчитано в run_scan одним батчем).
+    Лоты, помеченные виденными ТОЛЬКО что в этом же скане, в него не входят —
+    и правильно: у них всего одна точка цены, сравнивать не с чем, а
+    повторно качать их карточку не нужно.
 
     Возвращает число отправленных уведомлений о снижении цены.
     """
     # Берём только те pid из текущего «found», которые уже знакомы боту.
-    candidates = [pid for pid in sorted(found, reverse=True) if db.is_seen(pid)]
+    candidates = [pid for pid in sorted(found, reverse=True) if pid in seen]
     candidates = candidates[: config.PRICE_CHECK_TOP_N]
     if not candidates:
         return 0

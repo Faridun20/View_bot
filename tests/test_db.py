@@ -85,6 +85,40 @@ def test_seen_pids(isolated_db):
     assert not db.is_seen(222)
 
 
+def test_seen_pids_among(isolated_db):
+    db = isolated_db
+    db.mark_seen(100, "100100")
+    db.mark_seen(200, "100100")
+    db.mark_seen(300, "100100")
+    # Один батч-запрос вместо цикла is_seen
+    assert db.seen_pids_among([100, 200, 999]) == {100, 200}
+    assert db.seen_pids_among([]) == set()
+    assert db.seen_pids_among([999, 888]) == set()
+    # дубликаты и порядок не влияют
+    assert db.seen_pids_among([300, 300, 100]) == {300, 100}
+
+
+def test_seen_pids_among_large_batch(isolated_db):
+    """Больше лимита переменных SQLite (>900) — должно чанковаться корректно."""
+    db = isolated_db
+    db.mark_seen_bulk([(p, None) for p in range(0, 2000, 2)])  # чётные виденные
+    query = list(range(2500))
+    result = db.seen_pids_among(query)
+    assert result == {p for p in range(0, 2000, 2)}
+
+
+def test_sent_pids_for(isolated_db):
+    db = isolated_db
+    db.upsert_user(1, "u")
+    db.upsert_user(2, "v")
+    db.mark_sent(1, 100)
+    db.mark_sent(1, 200)
+    db.mark_sent(2, 300)
+    assert db.sent_pids_for(1) == {100, 200}
+    assert db.sent_pids_for(2) == {300}
+    assert db.sent_pids_for(999) == set()
+
+
 def test_sent_table(isolated_db):
     db = isolated_db
     db.upsert_user(1, "u")
