@@ -32,7 +32,12 @@
 """
 from __future__ import annotations
 
-from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
+from aiogram.types import (
+    InlineKeyboardButton,
+    InlineKeyboardMarkup,
+    KeyboardButton,
+    ReplyKeyboardMarkup,
+)
 
 from bot.scraper.models import (
     EXCAVATOR_SUBCATEGORIES,
@@ -49,6 +54,48 @@ def _btn(text: str, cb: str) -> InlineKeyboardButton:
 
 def _kb(*rows: list[InlineKeyboardButton]) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(inline_keyboard=list(rows))
+
+
+# ---------- постоянная нижняя клавиатура (reply keyboard) -------------------
+
+# Тексты кнопок reply-клавиатуры. Используются и в menu.py для обработки
+# нажатий — поэтому вынесены в константы (одно место правды).
+BTN_SEARCH = "🔍 Поиск"
+BTN_FILTER = "⚙️ Фильтр"
+BTN_FAVS = "🔖 Избранное"
+BTN_MENU = "📋 Меню"
+NAV_TEXTS = {BTN_SEARCH, BTN_FILTER, BTN_FAVS, BTN_MENU}
+
+
+def reply_keyboard() -> ReplyKeyboardMarkup:
+    """Постоянная клавиатура внизу экрана — быстрый доступ к 4 разделам
+    без ввода команд. Остаётся на экране между сообщениями."""
+    return ReplyKeyboardMarkup(
+        keyboard=[
+            [KeyboardButton(text=BTN_SEARCH), KeyboardButton(text=BTN_FILTER)],
+            [KeyboardButton(text=BTN_FAVS), KeyboardButton(text=BTN_MENU)],
+        ],
+        resize_keyboard=True,
+        is_persistent=True,
+        input_field_placeholder="Кнопки снизу или команда (/help)…",
+    )
+
+
+# ---------- клавиатуры под результатами поиска ------------------------------
+
+def search_more_kb(n: int) -> InlineKeyboardMarkup:
+    """Под итоговым сообщением успешного поиска — догрузить ещё N (новых)."""
+    return _kb([_btn(f"🔄 Ещё {n}", f"s:{n}"),
+                _btn("📋 В меню", "m:main")])
+
+
+def search_empty_kb(n: int, *, has_seen: bool) -> InlineKeyboardMarkup:
+    """Под сообщением «ничего не нашлось» — быстрые действия."""
+    rows = [[_btn("⚙️ Открыть фильтр", "m:filter"),
+             _btn("♻️ Сбросить фильтр", "f:reset")]]
+    if has_seen:
+        rows.append([_btn(f"🔄 Показать с повторами ({n})", f"s:all:{n}")])
+    return _kb(*rows)
 
 
 # ---------- главные экраны --------------------------------------------------
@@ -81,23 +128,32 @@ def search_menu() -> InlineKeyboardMarkup:
 
 
 def filter_menu(f: UserFilter) -> InlineKeyboardMarkup:
-    """Главный экран фильтра — короткие пиктограммы текущего значения."""
-    no_hours_label = "🚫 без часов" if f.skip_no_hours else "✅ без часов"
-    photo_label = "📷 только с фото" if f.require_photo else "🖼 любые (с/без фото)"
+    """Главный экран фильтра.
+
+    Каждая строка-условие помечена маркером: 🟢 — условие задано,
+    ▫️ — без ограничения. Так с одного взгляда видно, что включено.
+    """
+    def row(active: bool, label: str, cb: str) -> InlineKeyboardButton:
+        return _btn(f"{'🟢' if active else '▫️'} {label}", cb)
+
+    no_hours_label = ("☑️ Скрывать лоты без моточасов"
+                      if f.skip_no_hours else "▫️ Лоты без моточасов: показывать")
+    photo_label = ("☑️ Только с фото"
+                   if f.require_photo else "▫️ Фото: любые")
     return _kb(
-        [_btn(f"📏 {_short_subs(f)}", "f:edit:s")],
-        [_btn(f"🏭 {_short_mfr(f)}", "f:edit:m"),
-         _btn(f"📍 {_short_region(f)}", "f:edit:r")],
-        [_btn(f"🏆 {_short_grade(f)}", "f:edit:g"),
-         _btn(f"📅 {_short_year(f)}", "f:edit:y")],
-        [_btn(f"💰 {_short_price(f)}", "f:edit:p"),
-         _btn(f"⏱ {_short_hours(f)}", "f:edit:h")],
-        [_btn(f"🔍 {_short_keyword(f)}", "f:edit:k"),
-         _btn(f"🚫 {_short_blacklist(f)}", "f:edit:b")],
-        [_btn(no_hours_label, "fnoh:t"),
-         _btn(photo_label, "fph:t")],
+        [row(bool(f.subcategories), f"📏 {_short_subs(f)}", "f:edit:s")],
+        [row(bool(f.manufacturers), f"🏭 {_short_mfr(f)}", "f:edit:m"),
+         row(bool(f.regions), f"📍 {_short_region(f)}", "f:edit:r")],
+        [row(bool(f.min_grade), f"🏆 {_short_grade(f)}", "f:edit:g"),
+         row(bool(f.year_from or f.year_to), f"📅 {_short_year(f)}", "f:edit:y")],
+        [row(bool(f.price_min_won or f.price_max_won), f"💰 {_short_price(f)}", "f:edit:p"),
+         row(f.hours_max is not None, f"⏱ {_short_hours(f)}", "f:edit:h")],
+        [row(bool(f.keyword), f"🔍 {_short_keyword(f)}", "f:edit:k"),
+         row(bool(f.blacklist_keywords), f"🚫 {_short_blacklist(f)}", "f:edit:b")],
+        [_btn(no_hours_label, "fnoh:t")],
+        [_btn(photo_label, "fph:t")],
         [_btn("♻️ Сбросить весь фильтр", "f:reset")],
-        [_btn("← Назад", "m:main")],
+        [_btn("← В меню", "m:main")],
     )
 
 

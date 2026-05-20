@@ -20,7 +20,7 @@ from aiogram.exceptions import TelegramAPIError
 from aiogram.filters import Command, CommandObject
 from aiogram.types import Message
 
-from bot import config
+from bot import config, keyboards
 from bot.monitor import _fetch_item, _scan_categories, matches
 from bot.notifier import send_listing
 from bot.scraper.models import ListingPreview
@@ -194,30 +194,45 @@ async def do_search(bot: Bot, chat_id: int, *, n: int, show_all: bool) -> None:
     if sent == 0:
         await bot.send_message(
             chat_id,
-            f"😕 Ничего не подошло.\n"
-            f"Просмотрено: <b>{scanned}</b> лотов "
-            f"(скачано карточек: {fetched}, отсеяно по цене на превью: "
+            f"😕 <b>Ничего не подошло.</b>\n"
+            f"Просмотрено {scanned} свежих лотов "
+            f"(карточек скачано: {fetched}, отсеяно по цене: "
             f"{skipped_preview}, уже виденных: {skipped_seen}).\n\n"
-            f"Посмотрите фильтр: /myfilter\nСбросить фильтр: /reset"
+            f"Возможно, фильтр слишком узкий — ослабьте условия или сбросьте."
             f"{seen_hint}",
             parse_mode="HTML",
+            reply_markup=keyboards.search_empty_kb(n, has_seen=bool(skipped_seen)),
         )
     elif sent < n:
         await bot.send_message(
             chat_id,
-            f"Прислал <b>{sent}</b> из {n} — это всё, что нашёл среди "
+            f"✅ Прислал <b>{sent}</b> из {n} — это всё, что нашёл среди "
             f"{scanned} последних лотов.\n\n"
-            f"Расширить выборку: /filter, или попробуйте позже — новые лоты "
-            f"появляются регулярно.{seen_hint}",
+            f"Новые лоты появляются регулярно — загляните позже или "
+            f"расширьте фильтр.{seen_hint}",
             parse_mode="HTML",
+            reply_markup=keyboards.search_empty_kb(n, has_seen=bool(skipped_seen)),
         )
     else:
         await bot.send_message(
             chat_id,
-            f"✅ Прислал {sent} лотов "
-            f"(просмотрено {scanned}, скачано карточек {fetched}).{seen_hint}",
+            f"✅ Готово — прислал <b>{sent}</b> "
+            f"{_plural_lots(sent)}.{seen_hint}",
             parse_mode="HTML",
+            reply_markup=keyboards.search_more_kb(n),
         )
+
+
+def _plural_lots(n: int) -> str:
+    """Русское склонение слова «лот» для итогового сообщения."""
+    if 11 <= n % 100 <= 14:
+        return "лотов"
+    last = n % 10
+    if last == 1:
+        return "лот"
+    if 2 <= last <= 4:
+        return "лота"
+    return "лотов"
 
 
 # ---- helpers --------------------------------------------------------------

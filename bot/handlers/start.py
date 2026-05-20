@@ -19,38 +19,35 @@ router = Router(name="start")
 
 
 HELP_TEXT = (
-    "<b>Мониторинг 그린중기 (4396200.com)</b>\n\n"
-    "Бот следит за новыми объявлениями в категории <b>«Экскаваторы»</b> и присылает "
-    "карточку каждого нового лота, подходящего под ваш фильтр.\n\n"
-    "<b>👉 Самое удобное:</b> /menu — кнопочный интерфейс для всех действий.\n\n"
-    "<b>Команды:</b>\n"
-    "/menu — открыть меню (поиск, фильтр, помощь)\n"
-    "/start — подписаться\n"
-    "/stop — отписаться\n"
-    "/filter — настроить фильтр пошагово (без кнопок)\n"
-    "/myfilter — посмотреть текущий фильтр\n"
-    "/reset — сбросить фильтр (тогда шлются все новые лоты)\n"
-    "/search [N] — прислать N свежих лотов по фильтру, <b>исключая ранее показанные</b> "
-    "(макс 20, по умолчанию 5)\n"
-    "/search all [N] — то же, но <b>с повторами</b> (если хочется пересмотреть)\n"
-    "/forget — очистить вашу историю «уже виденных»\n"
-    "/favs — список ваших избранных лотов (добавлять кнопкой 🔖 под карточкой)\n"
-    "/history &lt;pid&gt; — история цен лота (например: <code>/history 9155895</code>)\n"
-    "/unblock_sellers — снять блокировку со всех продавцов из чёрного списка\n"
-    "/cancel — отменить ввод значения (когда бот ждёт число/слово)\n"
-    "/test — прислать самый свежий лот для проверки\n"
-    "/status — статистика бота\n"
-    "/help — эта справка\n\n"
-    f"Проверка сайта — каждые {config.MONITOR_INTERVAL_MINUTES} минут.\n"
-    f"Запчасти и навесное оборудование: "
-    f"{'включены' if config.INCLUDE_PARTS else 'НЕ показываются (только экскаваторы)'}."
+    "<b>🚜 Мониторинг экскаваторов — 그린중기 (4396200.com)</b>\n\n"
+    "Я слежу за новыми объявлениями и присылаю карточку каждого лота, "
+    "подходящего под ваш фильтр.\n\n"
+    "<b>👇 Проще всего — кнопки внизу экрана:</b>\n"
+    "🔍 Поиск · ⚙️ Фильтр · 🔖 Избранное · 📋 Меню\n\n"
+    "<b>Основное</b>\n"
+    "/menu — главное меню\n"
+    "/search [N] — прислать N свежих лотов (новых, до 20)\n"
+    "/search all [N] — то же, но с повторами\n"
+    "/favs — избранные лоты\n"
+    "/history &lt;pid&gt; — история цен лота\n\n"
+    "<b>Настройка</b>\n"
+    "/filter — фильтр по шагам\n"
+    "/myfilter — показать текущий фильтр\n"
+    "/reset — сбросить фильтр\n"
+    "/forget — очистить историю «уже виденных»\n"
+    "/unblock_sellers — снять блокировку продавцов\n\n"
+    "<b>Подписка и прочее</b>\n"
+    "/start — подписаться · /stop — пауза\n"
+    "/test — прислать самый свежий лот\n"
+    "/status — статистика · /cancel — отменить ввод\n\n"
+    f"⏱ Проверка сайта — каждые {config.MONITOR_INTERVAL_MINUTES} мин.\n"
+    f"🔧 Запчасти и навесное: "
+    f"{'показываются' if config.INCLUDE_PARTS else 'скрыты (только экскаваторы)'}."
 )
 
 
 @router.message(Command("start"))
 async def cmd_start(msg: Message) -> None:
-    from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
-
     from bot import keyboards  # локальный импорт, чтобы не плодить циклы
     db = init_db(config.DB_PATH)
     is_new = db.upsert_user(
@@ -59,7 +56,8 @@ async def cmd_start(msg: Message) -> None:
     )
 
     if is_new:
-        # Полное onboarding-сообщение для новичков
+        # Onboarding для новичков. Сразу ставим постоянную клавиатуру внизу —
+        # она и будет основным способом навигации.
         first_name = msg.from_user.first_name if msg.from_user else "коллега"
         text = (
             f"👋 Здравствуйте, {esc_html(first_name)}!\n\n"
@@ -67,25 +65,21 @@ async def cmd_start(msg: Message) -> None:
             f"<b>4396200.com (그린중기)</b> — крупном корейском маркетплейсе "
             f"подержанной спецтехники.\n\n"
             f"<b>Как пользоваться:</b>\n"
-            f"  1️⃣  Настройте фильтр — что вас интересует (производитель, "
-            f"год, цена, регион…)\n"
-            f"  2️⃣  Каждые {config.MONITOR_INTERVAL_MINUTES} мин я буду присылать "
-            f"новые лоты, подходящие под фильтр\n"
-            f"  3️⃣  Сразу посмотреть «что есть сейчас» — кнопка «🔍 Поиск»\n\n"
-            f"Готовы начать?"
+            f"  1️⃣  <b>⚙️ Фильтр</b> — задайте, что интересует (бренд, год, "
+            f"цена, регион…)\n"
+            f"  2️⃣  Каждые {config.MONITOR_INTERVAL_MINUTES} мин я пришлю новые "
+            f"подходящие лоты\n"
+            f"  3️⃣  <b>🔍 Поиск</b> — посмотреть, что есть прямо сейчас\n\n"
+            f"👇 Кнопки внизу всегда под рукой. Начните с <b>⚙️ Фильтр</b>."
         )
-        kb = InlineKeyboardMarkup(inline_keyboard=[
-            [InlineKeyboardButton(text="⚙️ Шаг 1: Настроить фильтр", callback_data="m:filter")],
-            [InlineKeyboardButton(text="🔍 Или сразу поиск (5 лотов)", callback_data="s:5")],
-            [InlineKeyboardButton(text="❓ Все команды", callback_data="m:help")],
-        ])
-        await msg.answer(text, parse_mode="HTML", reply_markup=kb)
+        await msg.answer(text, parse_mode="HTML",
+                         reply_markup=keyboards.reply_keyboard())
     else:
-        # Возвращающийся подписчик — сразу главное меню
-        auto_on = db.is_active(msg.chat.id)
+        # Возвращающийся подписчик — возвращаем нижнюю клавиатуру.
         await msg.answer(
-            "✅ Подписка возобновлена.",
-            reply_markup=keyboards.main_menu(auto_on),
+            "✅ С возвращением! Подписка активна.\n"
+            "Кнопки внизу 👇 или /menu для всех настроек.",
+            reply_markup=keyboards.reply_keyboard(),
         )
 
 
@@ -109,10 +103,16 @@ async def cmd_help(msg: Message) -> None:
 @router.message(Command("status"))
 async def cmd_status(msg: Message) -> None:
     db = init_db(config.DB_PATH)
+    auto_on = db.is_active(msg.chat.id)
+    favs_n = db.count_favorites(msg.chat.id)
     text = (
-        f"<b>Статистика</b>\n"
+        f"<b>📊 Статистика</b>\n\n"
+        f"{'🔔 Авто-уведомления: ВКЛ' if auto_on else '🔕 Авто-уведомления: ВЫКЛ'}\n"
+        f"🔖 Ваше избранное: {favs_n}\n\n"
+        f"<i>По боту в целом:</i>\n"
         f"• Активных подписчиков: {len(db.active_users())}\n"
-        f"• Лотов в истории: {db.seen_count()}"
+        f"• Лотов в истории: {db.seen_count()}\n"
+        f"• Проверка сайта каждые {config.MONITOR_INTERVAL_MINUTES} мин"
     )
     await msg.answer(text, parse_mode="HTML")
 

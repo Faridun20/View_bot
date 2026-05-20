@@ -59,6 +59,37 @@ async def cmd_menu(msg: Message, state: FSMContext) -> None:
                      reply_markup=keyboards.main_menu(auto_on))
 
 
+# ---------- нажатия постоянной нижней клавиатуры (reply keyboard) ----------
+# Эти кнопки шлют обычный текст. Обрабатываем ДО FSM-инпутов (зарегистрированы
+# выше по файлу) и чистим состояние, чтобы навигация работала из любого места.
+
+@router.message(F.text == keyboards.BTN_MENU)
+async def btn_menu(msg: Message, state: FSMContext) -> None:
+    await cmd_menu(msg, state)
+
+
+@router.message(F.text == keyboards.BTN_SEARCH)
+async def btn_search(msg: Message, state: FSMContext) -> None:
+    await state.clear()
+    await msg.answer("<b>🔍 Поиск</b>\n\nСколько свежих лотов прислать?",
+                     parse_mode="HTML", reply_markup=keyboards.search_menu())
+
+
+@router.message(F.text == keyboards.BTN_FILTER)
+async def btn_filter(msg: Message, state: FSMContext) -> None:
+    await state.clear()
+    f = init_db(config.DB_PATH).get_filter(msg.chat.id)
+    await msg.answer(_filter_text(f), parse_mode="HTML",
+                     reply_markup=keyboards.filter_menu(f))
+
+
+@router.message(F.text == keyboards.BTN_FAVS)
+async def btn_favs(msg: Message, state: FSMContext) -> None:
+    await state.clear()
+    from bot.handlers.favorites import show_favorites
+    await show_favorites(msg.bot, msg.chat.id)
+
+
 def _main_text(db, chat_id: int, auto_on: bool) -> str:
     """Главное меню — статус, сводка фильтра, счётчик избранного."""
     f = db.get_filter(chat_id)
@@ -99,23 +130,45 @@ def _main_text(db, chat_id: int, auto_on: bool) -> str:
 
 def _filter_text(f: UserFilter) -> str:
     if f.is_empty():
-        body = "<i>Фильтр пустой — будут приходить все новые экскаваторы.</i>"
-    else:
-        rows = [
-            f"📏 {keyboards._short_subs(f)}",
-            f"🏭 {keyboards._short_mfr(f)}",
-            f"📍 {keyboards._short_region(f)}",
-            f"🏆 {keyboards._short_grade(f)}",
-            f"📅 {keyboards._short_year(f)}",
-            f"💰 {keyboards._short_price(f)}",
-            f"⏱ {keyboards._short_hours(f)}"
-            + ("  🚫 без часов" if f.skip_no_hours else ""),
-            f"🔍 {keyboards._short_keyword(f)}",
-            f"🚫 {keyboards._short_blacklist(f)}",
-            ("📷 Только с фото" if f.require_photo else "🖼 Любые (с/без фото)"),
-        ]
-        body = "\n".join(rows)
-    return f"<b>⚙️ Ваш фильтр</b>\n\n{body}\n\nТапните по строке, чтобы изменить:"
+        return (
+            "<b>⚙️ Ваш фильтр</b>\n\n"
+            "<i>Сейчас фильтр пустой — приходят все новые экскаваторы.</i>\n\n"
+            "Добавьте условия кнопками ниже 👇 — и бот будет присылать "
+            "только то, что вам нужно."
+        )
+
+    # Собираем только заданные условия — без шума «любой/любая».
+    active: list[str] = []
+    if f.subcategories:
+        active.append(f"📏 {keyboards._short_subs(f)}")
+    if f.manufacturers:
+        active.append(f"🏭 {keyboards._short_mfr(f)}")
+    if f.regions:
+        active.append(f"📍 {keyboards._short_region(f)}")
+    if f.min_grade:
+        active.append(f"🏆 {keyboards._short_grade(f)}")
+    if f.year_from or f.year_to:
+        active.append(f"📅 Год {keyboards._short_year(f)}")
+    if f.price_min_won or f.price_max_won:
+        active.append(f"💰 {keyboards._short_price(f)}")
+    if f.hours_max is not None:
+        active.append(f"⏱ {keyboards._short_hours(f)}")
+    if f.keyword:
+        active.append(f"🔍 Слово {keyboards._short_keyword(f)}")
+    if f.blacklist_keywords:
+        active.append(f"🚫 Исключить: {keyboards._short_blacklist(f)}")
+    if f.skip_no_hours:
+        active.append("🚫 Скрывать лоты без моточасов")
+    if f.require_photo:
+        active.append("📷 Только лоты с фото")
+
+    body = "\n".join(f"• {row}" for row in active)
+    return (
+        "<b>⚙️ Ваш фильтр</b>\n\n"
+        f"<b>Активные условия:</b>\n{body}\n\n"
+        "<i>Остальное — без ограничений.</i>\n\n"
+        "Тапните строку ниже, чтобы изменить 👇"
+    )
 
 
 # ---------- навигация по экранам -------------------------------------------
