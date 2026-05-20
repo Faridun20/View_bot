@@ -20,8 +20,8 @@ from aiogram.exceptions import TelegramAPIError
 from aiogram.filters import Command, CommandObject
 from aiogram.types import Message
 
-from bot import config, keyboards
-from bot.monitor import _fetch_item, _scan_categories, matches
+from bot import catalog, config, keyboards
+from bot.monitor import matches
 from bot.notifier import send_listing
 from bot.scraper.models import ListingPreview
 from bot.scraper.parser import _parse_price
@@ -111,11 +111,9 @@ async def do_search(bot: Bot, chat_id: int, *, n: int, show_all: bool) -> None:
         chat_id, f"🔎 Ищу {n} лотов {filter_descr}{mode_descr}…"
     )
 
-    # 1. Обход подкатегорий — даёт {pid: (cate_code, ListingPreview)}.
-    # _scan_categories возвращает только {pid: cate_code}, поэтому ниже
-    # дублируем обход целиком — у нас есть превью с ценой/моделью.
+    # 1. Обход подкатегорий — единый сервисный слой bot.catalog.
     try:
-        previews = await asyncio.to_thread(_scan_with_previews)
+        previews = await asyncio.to_thread(catalog.scan_previews)
     except Exception as e:
         logger.warning("search: ошибка обхода: %s", e)
         logger.debug("traceback:", exc_info=True)
@@ -151,7 +149,7 @@ async def do_search(bot: Bot, chat_id: int, *, n: int, show_all: bool) -> None:
             continue
 
         # Полная карточка
-        item = await asyncio.to_thread(_fetch_item, prev.pid)
+        item = await asyncio.to_thread(catalog.fetch_item, prev.pid)
         if item is None:
             continue
         fetched += 1
@@ -233,24 +231,3 @@ def _plural_lots(n: int) -> str:
     if 2 <= last <= 4:
         return "лота"
     return "лотов"
-
-
-# ---- helpers --------------------------------------------------------------
-
-def _scan_with_previews() -> list[ListingPreview]:
-    """Обходит подкатегории (с учётом INCLUDE_PARTS), возвращает уникальные
-    превью по убыванию pid."""
-    from bot.scraper import get_session, parse_listing_page
-    from bot.scraper.models import target_subcategories
-
-    sess = get_session()
-    by_pid: dict[int, ListingPreview] = {}
-    for cate_code in target_subcategories(include_parts=config.INCLUDE_PARTS):
-        try:
-            resp = sess.get(f"/sub8_1_s.html?cate_code={cate_code}&limit=70&page=1")
-            for prev in parse_listing_page(resp.text, cate_code=cate_code):
-                # Если pid уже встречался — оставляем первое попадание.
-                by_pid.setdefault(prev.pid, prev)
-        except Exception as e:
-            logger.exception("search/_scan_with_previews: cate=%s: %s", cate_code, e)
-    return sorted(by_pid.values(), key=lambda p: p.pid, reverse=True)

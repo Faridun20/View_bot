@@ -8,10 +8,8 @@ from aiogram import F, Router
 from aiogram.filters import Command
 from aiogram.types import Message
 
-from bot import config
+from bot import catalog, config
 from bot.notifier import send_listing
-from bot.scraper import get_session, parse_item_page, parse_listing_page
-from bot.scraper.models import EXCAVATOR_SUBCATEGORIES
 from bot.storage import init_db
 
 logger = logging.getLogger(__name__)
@@ -122,7 +120,7 @@ async def cmd_test(msg: Message) -> None:
     """Прислать самый свежий лот с сайта — для проверки рендеринга."""
     await msg.answer("Ищу свежий лот…")
     try:
-        item = await asyncio.to_thread(_fetch_latest)
+        item = await asyncio.to_thread(catalog.fetch_latest)
     except Exception as e:
         logger.warning("test: ошибка: %s", e)
         logger.debug("traceback:", exc_info=True)
@@ -153,19 +151,3 @@ async def cmd_forget(msg: Message) -> None:
         )
     else:
         await msg.answer("История уже пуста — забывать нечего.")
-
-
-def _fetch_latest():
-    """Берёт самый свежий лот среди настоящих экскаваторов и парсит карточку."""
-    from bot.scraper.models import target_subcategories
-    sess = get_session()
-    # Идём по «машинным» подкатегориям — обычно объявления появляются часто
-    # в крупных экскаваторах (100100) и мини (100104).
-    for cate_code in target_subcategories(include_parts=config.INCLUDE_PARTS):
-        resp = sess.get(f"/sub8_1_s.html?cate_code={cate_code}&limit=70&page=1")
-        previews = parse_listing_page(resp.text, cate_code=cate_code)
-        if previews:
-            top = previews[0]
-            r = sess.get(f"/sub8_1_vvv.html?pid={top.pid}")
-            return parse_item_page(r.text, top.pid)
-    return None

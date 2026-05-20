@@ -12,8 +12,7 @@ from aiogram.types import (
     CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup, Message,
 )
 
-from bot import config
-from bot.monitor import _fetch_item
+from bot import catalog, config
 from bot.notifier import _favorite_kb, send_listing
 from bot.storage import init_db
 
@@ -29,7 +28,7 @@ async def cb_fav_add(cb: CallbackQuery) -> None:
     # компактный список вместо одних pid'ов. Если карточку не достали — не страшно.
     model: str | None = None
     try:
-        item = await asyncio.to_thread(_fetch_item, pid)
+        item = await asyncio.to_thread(catalog.fetch_item, pid)
         if item:
             model = item.model
     except Exception:
@@ -64,7 +63,7 @@ async def cb_blacklist_seller(cb: CallbackQuery) -> None:
     хранит только pid (лимит 64 байта).
     """
     pid = int(cb.data.split(":")[2])
-    item = await asyncio.to_thread(_fetch_item, pid)
+    item = await asyncio.to_thread(catalog.fetch_item, pid)
     if item is None or not item.seller:
         await cb.answer("Не нашёл продавца в карточке", show_alert=True)
         return
@@ -247,7 +246,7 @@ async def cb_favs_open(cb: CallbackQuery) -> None:
     """Открыть карточку конкретного лота из списка избранного."""
     pid = int(cb.data.split(":")[2])
     await cb.answer("Открываю карточку…")
-    item = await asyncio.to_thread(_fetch_item, pid)
+    item = await asyncio.to_thread(catalog.fetch_item, pid)
     if item is None or not (item.model or item.manufacturer or item.price_raw):
         await cb.message.answer(
             f"⚠️ Не удалось загрузить лот {pid} — возможно, он снят с сайта.\n\n"

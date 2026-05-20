@@ -10,57 +10,26 @@ from typing import Iterable
 
 from aiogram import Bot
 
-from bot import config
+from bot import catalog, config
 from bot.notifier import send_listing, send_price_drop
-from bot.scraper import get_session, parse_item_page, parse_listing_page
 from bot.scraper.models import (
-    EXCAVATOR_SUBCATEGORIES,
     Listing,
     grade_rank,
     looks_like_parts,
     region_matches,
-    target_subcategories,
 )
 from bot.storage.db import DB, UserFilter
 
 logger = logging.getLogger(__name__)
 
 
-# ---------- сетевые операции (sync, в to_thread) ---------------------------
+# ---------- сетевые операции -----------------------------------------------
+# Обход каталога и загрузка карточек живут в bot.catalog (единый сервисный
+# слой). Здесь оставлены тонкие алиасы — на них ещё ссылается часть кода и
+# тесты; новый код должен импортировать из bot.catalog напрямую.
 
-def _scan_categories() -> dict[int, str]:
-    """Обходит подкатегории экскаваторов (без запчастей, если так настроено).
-
-    Возвращает {pid: cate_code}.
-    """
-    sess = get_session()
-    found: dict[int, str] = {}
-    for cate_code in target_subcategories(include_parts=config.INCLUDE_PARTS):
-        url = f"/sub8_1_s.html?cate_code={cate_code}&limit=70&page=1"
-        try:
-            resp = sess.get(url)
-            for prev in parse_listing_page(resp.text, cate_code=cate_code):
-                # Если pid уже встретился в другой подкатегории — оставляем
-                # ту, где впервые увидели (порядок обхода).
-                found.setdefault(prev.pid, cate_code)
-        except Exception as e:
-            # Сетевой/парсерный сбой по одной подкатегории — продолжаем
-            # обход остальных. Без полного traceback (шумно на проде);
-            # для отладки — поднимите LOG_LEVEL=DEBUG.
-            logger.warning("Ошибка обхода cate_code=%s: %s", cate_code, e)
-            logger.debug("traceback:", exc_info=True)
-    return found
-
-
-def _fetch_item(pid: int) -> Listing | None:
-    sess = get_session()
-    try:
-        resp = sess.get(f"/sub8_1_vvv.html?pid={pid}")
-        return parse_item_page(resp.text, pid)
-    except Exception as e:
-        logger.warning("Ошибка загрузки карточки pid=%s: %s", pid, e)
-        logger.debug("traceback:", exc_info=True)
-        return None
+_scan_categories = catalog.scan_categories
+_fetch_item = catalog.fetch_item
 
 
 # ---------- фильтрация (чистая Python-логика) ------------------------------
